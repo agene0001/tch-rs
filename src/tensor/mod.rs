@@ -251,3 +251,18 @@ impl Tensor {
         self.g_to_mkldnn(self.kind())
     }
 }
+
+// On Windows MSVC, the linker drops the `torch_cuda.lib` import unless a CUDA
+// symbol is statically referenced — see `torch-sys/libtch/dummy_cuda_dependency.cpp`
+// and the comments in both build scripts for the full rationale. The reference
+// has to live in a translation unit that consumers of `tch` always link
+// (i.e. one that contains symbols their code actually uses); `Tensor` lives
+// here, so this file is always pulled out of the rlib, and `#[used]` then
+// guarantees this static survives codegen. The static is gated on `use_cuda`
+// (set by tch's build script when torch-sys reports CUDA was found) and on
+// `target_os = "windows"`, since Linux/macOS runtime linkers honor `-ltorch_cuda`
+// regardless of symbol use and don't need the anchor.
+#[cfg(all(target_os = "windows", use_cuda))]
+#[used]
+static FORCE_TORCH_CUDA_LINK: [unsafe extern "C" fn(); 1] =
+    [torch_sys::dummy_cuda_dependency];

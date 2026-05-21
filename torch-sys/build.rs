@@ -355,7 +355,7 @@ impl SystemInfo {
         }
     }
 
-    fn make(&self) {
+    fn make(&self, use_cuda: bool) {
         println!("cargo:rerun-if-changed=libtch/torch_python.cpp");
         println!("cargo:rerun-if-changed=libtch/torch_python.h");
         println!("cargo:rerun-if-changed=libtch/torch_api_generated.cpp");
@@ -368,6 +368,20 @@ impl SystemInfo {
         let mut c_files = vec!["libtch/torch_api.cpp", "libtch/torch_api_generated.cpp"];
         if cfg!(feature = "python-extension") {
             c_files.push("libtch/torch_python.cpp")
+        }
+        // Windows MSVC drops the `torch_cuda.lib` import unless a CUDA symbol is
+        // statically referenced from our compiled objects — the .lib is just an
+        // import lib, `/OPT:REF` strips imports with no consuming reference, and
+        // `torch_cuda.dll` then never loads at startup so its DllMain never runs.
+        // The result is `at::globalContext().hasCUDA() == false` regardless of
+        // GPU/driver state. This mirrors the `dummy_cuda_dependency.cpp` mechanism
+        // that lived here pre-commit 16e8f59 (Oct 2024) and was removed under the
+        // assumption it was no longer needed — empirically it still is on Windows.
+        // Linux/macOS keep working without the stub because ELF/Mach-O record
+        // `DT_NEEDED` from the linker's `-l` flag regardless of symbol use.
+        if use_cuda && self.os == Os::Windows {
+            println!("cargo:rerun-if-changed=libtch/dummy_cuda_dependency.cpp");
+            c_files.push("libtch/dummy_cuda_dependency.cpp");
         }
 
         match self.os {
@@ -442,9 +456,21 @@ fn main() -> anyhow::Result<()> {
         //
         // Update: it seems that the dummy dependency is not necessary anymore, so just
         // removing it and keeping this comment around for legacy.
+        // Declare custom cfgs we emit so the Rust 2024 unknown-cfg lint is silent.
+        println!("cargo:rustc-check-cfg=cfg(use_cuda)");
+
         let si_lib = &system_info.libtorch_lib_dir;
         let use_cuda =
             si_lib.join("libtorch_cuda.so").exists() || si_lib.join("torch_cuda.dll").exists();
+        if use_cuda {
+            // Own-crate cfg, used by `torch-sys/src/lib.rs` to gate the
+            // `dummy_cuda_dependency` extern decl.
+            println!("cargo:rustc-cfg=use_cuda");
+            // Metadata for downstream consumers (read as `DEP_TCH_CUDA` because
+            // this crate declares `links = "tch"`). `tch/build.rs` uses it to
+            // emit its own `use_cuda` cfg so the `#[used]` link anchor compiles.
+            println!("cargo:cuda=1");
+        }
         let use_cuda_cu = si_lib.join("libtorch_cuda_cu.so").exists()
             || si_lib.join("torch_cuda_cu.dll").exists();
         let use_cuda_cpp = si_lib.join("libtorch_cuda_cpp.so").exists()
@@ -453,7 +479,7 @@ fn main() -> anyhow::Result<()> {
             si_lib.join("libtorch_hip.so").exists() || si_lib.join("torch_hip.dll").exists();
         println!("cargo:rustc-link-search=native={}", si_lib.display());
 
-        system_info.make();
+        system_info.make(use_cuda);
 
         println!("cargo:rustc-link-lib=static=tch");
         if use_cuda {

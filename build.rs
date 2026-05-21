@@ -10,4 +10,11 @@ fn main() {
         }
         _ => {}
     }
+    // Propagate the CUDA-presence cfg set by `torch-sys/build.rs` (via the
+    // `links = "tch"` metadata channel) so we can gate the link anchor that
+    // forces MSVC to keep the `torch_cuda.lib` import.
+    println!("cargo:rustc-check-cfg=cfg(use_cuda)");
+    if std::env::var_os("DEP_TCH_CUDA").is_some() {
+        println!("cargo:rustc-cfg=use_cuda");
+    }
 }
