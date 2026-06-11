@@ -322,8 +322,9 @@ fn init_test() {
     assert!(ortho_shape_fail.is_err());
     let kaiming_u = vs.root().var("kaiming_u", &[20, 100], nn::init::DEFAULT_KAIMING_UNIFORM);
     assert!(f64::abs(f64_from(&kaiming_u.mean(Kind::Float))) < 5e-3);
-    // The expected stdev is sqrt(2 / 100)
-    assert!(f64::abs(f64_from(&kaiming_u.std(true)) - (0.02f64).sqrt()) < 2e-3);
+    // DEFAULT_KAIMING_UNIFORM is U(+-1/sqrt(fan_in)) like PyTorch's
+    // nn.Linear default, so the expected stdev is 1/sqrt(3 * 100).
+    assert!(f64::abs(f64_from(&kaiming_u.std(true)) - (1f64 / 300.).sqrt()) < 2e-3);
     let kaiming_n = vs.root().var("kaiming_n", &[20, 100], nn::init::DEFAULT_KAIMING_NORMAL);
     assert!(f64::abs(f64_from(&kaiming_n.mean(Kind::Float))) < 5e-3);
     assert!(f64::abs(f64_from(&kaiming_n.std(true)) - (0.02f64).sqrt()) < 3e-3);
