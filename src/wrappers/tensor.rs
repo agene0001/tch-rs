@@ -424,7 +424,16 @@ impl Tensor {
 
     /// Returns the total number of elements stored in a tensor.
     pub fn numel(&self) -> usize {
-        self.size().iter().product::<i64>() as usize
+        // Avoid the heap allocation that `size()` performs: tensor ranks are
+        // tiny, so read the shape into a stack buffer for the common case.
+        let dim = unsafe_torch!(at_dim(self.c_tensor));
+        if dim <= 8 {
+            let mut sz = [0i64; 8];
+            unsafe_torch!(at_shape(self.c_tensor, sz.as_mut_ptr()));
+            sz[..dim].iter().product::<i64>() as usize
+        } else {
+            self.size().iter().product::<i64>() as usize
+        }
     }
 
     // This is similar to vec_... but faster as it directly blits the data.

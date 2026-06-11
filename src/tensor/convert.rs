@@ -31,7 +31,14 @@ impl<T: Element + Copy> TryFrom<&Tensor> for Vec<Vec<T>> {
         // TODO: Try to remove this intermediary copy.
         let mut all_elems = vec![T::ZERO; num_elem];
         tensor.f_to_kind(T::KIND)?.f_copy_data(&mut all_elems, num_elem)?;
-        let out = (0..s1).map(|i1| (0..s2).map(|i2| all_elems[i1 * s2 + i2]).collect()).collect();
+        // Build the rows from contiguous chunks rather than indexing element by
+        // element, which lets the compiler lower each row to a memcpy.
+        // `chunks_exact` panics on a zero chunk size, so handle empty rows.
+        let out = if s2 == 0 {
+            (0..s1).map(|_| Vec::new()).collect()
+        } else {
+            all_elems.chunks_exact(s2).map(<[T]>::to_vec).collect()
+        };
         Ok(out)
     }
 }
@@ -47,13 +54,16 @@ impl<T: Element + Copy> TryFrom<&Tensor> for Vec<Vec<Vec<T>>> {
         // TODO: Try to remove this intermediary copy.
         let mut all_elems = vec![T::ZERO; num_elem];
         tensor.f_to_kind(T::KIND)?.f_copy_data(&mut all_elems, num_elem)?;
-        let out = (0..s1)
-            .map(|i1| {
-                (0..s2)
-                    .map(|i2| (0..s3).map(|i3| all_elems[i1 * s2 * s3 + i2 * s3 + i3]).collect())
-                    .collect()
-            })
-            .collect();
+        // Slice into contiguous chunks rather than indexing element by element.
+        // `chunks_exact` panics on a zero chunk size, so handle empty dims.
+        let out = if s2 == 0 || s3 == 0 {
+            (0..s1).map(|_| (0..s2).map(|_| Vec::new()).collect()).collect()
+        } else {
+            all_elems
+                .chunks_exact(s2 * s3)
+                .map(|plane| plane.chunks_exact(s3).map(<[T]>::to_vec).collect())
+                .collect()
+        };
         Ok(out)
     }
 }

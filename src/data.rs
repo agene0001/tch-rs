@@ -16,6 +16,7 @@ pub struct Iter2 {
     total_size: i64,
     device: Device,
     return_smaller_last_batch: bool,
+    pin_memory: bool,
 }
 
 impl Iter2 {
@@ -47,6 +48,7 @@ impl Iter2 {
             total_size,
             device: Device::Cpu,
             return_smaller_last_batch: false,
+            pin_memory: false,
         })
     }
 
@@ -89,6 +91,20 @@ impl Iter2 {
         self.return_smaller_last_batch = true;
         self
     }
+
+    /// Page-locks (pins) each mini-batch before transferring it, enabling
+    /// asynchronous host-to-device copies.
+    ///
+    /// This only has an effect when the target device (set via
+    /// [`Iter2::to_device`]) is a CUDA device. Pinned host memory lets the
+    /// copy be issued without blocking the host thread, mirroring PyTorch's
+    /// `DataLoader(pin_memory=True)`. It trades a per-batch page-locking cost
+    /// for overlap, so it is most useful when the per-batch transfer is
+    /// non-trivial relative to the host-side work between batches.
+    pub fn pin_memory(&mut self, pin_memory: bool) -> &mut Iter2 {
+        self.pin_memory = pin_memory;
+        self
+    }
 }
 
 impl Iterator for Iter2 {
@@ -101,10 +117,23 @@ impl Iterator for Iter2 {
             None
         } else {
             self.batch_index += 1;
-            Some((
-                self.xs.i(start..start + size).to_device(self.device),
-                self.ys.i(start..start + size).to_device(self.device),
-            ))
+            let xs = self.xs.i(start..start + size);
+            let ys = self.ys.i(start..start + size);
+            match self.device {
+                // Pin the batch then issue a non-blocking transfer so the copy
+                // can overlap with host-side work. Pinning only pays off for
+                // CUDA targets; other devices keep the plain blocking path.
+                Device::Cuda(_) if self.pin_memory => {
+                    let xs = xs.pin_memory(self.device);
+                    let ys = ys.pin_memory(self.device);
+                    let (xk, yk) = (xs.kind(), ys.kind());
+                    Some((
+                        xs.to_device_(self.device, xk, true, false),
+                        ys.to_device_(self.device, yk, true, false),
+                    ))
+                }
+                _ => Some((xs.to_device(self.device), ys.to_device(self.device))),
+            }
         }
     }
 }

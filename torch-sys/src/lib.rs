@@ -334,3 +334,14 @@ extern "C" {
     pub fn atm_set_tensor_expr_fuser_enabled(enabled: c_int);
     pub fn atm_get_tensor_expr_fuser_enabled() -> bool;
 }
+
+// See `libtch/dummy_cuda_dependency.cpp` and the comment in `build.rs` near the
+// Windows c_files push for the full rationale. Briefly: without referencing a
+// CUDA symbol from compiled Rust/C++ in this crate, MSVC's linker drops the
+// `torch_cuda.lib` import and `Cuda::is_available()` reports false at runtime.
+// The actual anchor `#[used] static` lives in the top-level `tch` crate
+// (`src/tensor/mod.rs`) so it's kept across rlib boundaries.
+#[cfg(use_cuda)]
+unsafe extern "C" {
+    pub fn dummy_cuda_dependency();
+}
