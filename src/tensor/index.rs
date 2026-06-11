@@ -297,10 +297,10 @@ impl Tensor {
         // Make sure n. non-newaxis does not exceed n. of dimensions
         let n_newaxis = index_spec.iter().filter(|spec| *spec == &InsertNewAxis).count();
 
-        if index_spec.len() > self.size().len() + n_newaxis {
+        let dim = self.dim();
+        if index_spec.len() > dim + n_newaxis {
             return Err(TchError::Shape(format!(
-                "too many indices for tensor of dimension {}",
-                self.size().len()
+                "too many indices for tensor of dimension {dim}"
             )));
         }
 
@@ -308,7 +308,7 @@ impl Tensor {
         for spec in index_spec.iter() {
             use super::Kind::*;
             if let IndexSelect(tensor) = spec {
-                if tensor.size().len() != 1 {
+                if tensor.dim() != 1 {
                     return Err(TchError::Shape(
                         "Multi-dimensional tensor is not supported for indexing".to_string(),
                     ));

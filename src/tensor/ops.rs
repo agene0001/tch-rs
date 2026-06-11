@@ -1,6 +1,6 @@
 //! Implement various ops traits for tensors
 use super::Tensor;
-use crate::Scalar;
+use crate::{Kind, Scalar};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 fn id<T>(v: T) -> T {
@@ -11,8 +11,23 @@ fn neg(t: Tensor) -> Tensor {
     t.neg()
 }
 
-fn inv(t: Tensor) -> Tensor {
-    t.pow_tensor_scalar(-1)
+// `scalar / tensor` as a single division, with the scalar promoted the way
+// PyTorch promotes wrapped numbers: it adopts the tensor's kind when that is
+// floating-point or complex, and falls back to Float otherwise so that
+// integer and bool tensors get true division (`2 / int_tensor` -> floats)
+// instead of erroring out like `pow(-1)` does on integer tensors.
+fn rdiv<S: Into<Scalar>>(lhs: S, rhs: &Tensor) -> Tensor {
+    let kind = match rhs.kind() {
+        kind @ (Kind::Half
+        | Kind::BFloat16
+        | Kind::Float
+        | Kind::Double
+        | Kind::ComplexHalf
+        | Kind::ComplexFloat
+        | Kind::ComplexDouble) => kind,
+        _ => Kind::Float,
+    };
+    Tensor::full([0i64; 0], lhs, (kind, rhs.device())).g_div(rhs)
 }
 
 macro_rules! impl_op {
@@ -139,6 +154,35 @@ where
     }
 }
 
+// Scalar-on-the-left division gets its own impls rather than going through
+// `impl_op_basic!`: there is no `rev` post-processing of `tensor op scalar`
+// that yields `scalar / tensor` without either a second rounding step or a
+// panic on integer tensors, so it is computed directly via `rdiv`.
+macro_rules! impl_div_scalar_lhs {
+    ($typ:ty, $conv:expr) => {
+        impl Div<Tensor> for $typ {
+            type Output = Tensor;
+
+            fn div(self, rhs: Tensor) -> Self::Output {
+                self.div(&rhs)
+            }
+        }
+
+        impl Div<&Tensor> for $typ {
+            type Output = Tensor;
+
+            fn div(self, rhs: &Tensor) -> Self::Output {
+                rdiv($conv(self), rhs)
+            }
+        }
+    };
+}
+
+impl_div_scalar_lhs!(i32, |v| v as i64);
+impl_div_scalar_lhs!(i64, |v| v);
+impl_div_scalar_lhs!(f32, |v| v as f64);
+impl_div_scalar_lhs!(f64, |v| v);
+
 macro_rules! impl_op_basic {
     /* rev such that rev(op(b, a)) = op(a, b) */
     ($trait:ident, $func:ident, $op:ident, $rev:ident) => {
@@ -263,7 +307,6 @@ impl_op_assign!(MulAssign, mul_assign, g_mul_);
 impl_op_assign_basic!(MulAssign, mul_assign, g_mul_scalar_);
 
 impl_op!(Div, div, g_div);
-impl_op_basic!(Div, div, g_div_scalar, inv);
 impl_op_assign!(DivAssign, div_assign, g_div_);
 impl_op_assign_basic!(DivAssign, div_assign, g_div_scalar_);
 

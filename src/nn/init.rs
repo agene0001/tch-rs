@@ -48,6 +48,8 @@ pub enum NormalOrUniform {
 #[derive(Debug, Copy, Clone)]
 pub enum NonLinearity {
     ReLU,
+    /// Leaky ReLU parameterized by its negative slope.
+    LeakyReLU(f64),
     Linear,
     Sigmoid,
     Tanh,
@@ -59,6 +61,9 @@ impl NonLinearity {
     pub fn gain(&self) -> f64 {
         match *self {
             NonLinearity::ReLU => 2f64.sqrt(),
+            NonLinearity::LeakyReLU(negative_slope) => {
+                (2. / (1. + negative_slope * negative_slope)).sqrt()
+            }
             NonLinearity::Tanh => 5. / 3.,
             NonLinearity::Linear | NonLinearity::Sigmoid => 1.,
             NonLinearity::SELU => 0.75,
@@ -88,10 +93,14 @@ pub enum Init {
     Orthogonal { gain: f64 },
 }
 
+// PyTorch's `nn.Linear`/`nn.Conv*` reset_parameters use
+// `kaiming_uniform_(weight, a=math.sqrt(5))`, i.e. a leaky-relu gain of
+// sqrt(2 / (1 + 5)) = sqrt(1/3), which yields a bound of 1/sqrt(fan_in).
+// 2.23606797749979 is sqrt(5) (sqrt is not const-evaluable).
 pub const DEFAULT_KAIMING_UNIFORM: Init = Init::Kaiming {
     dist: NormalOrUniform::Uniform,
     fan: FanInOut::FanIn,
-    non_linearity: NonLinearity::ReLU,
+    non_linearity: NonLinearity::LeakyReLU(2.23606797749979),
 };
 
 pub const DEFAULT_KAIMING_NORMAL: Init = Init::Kaiming {
@@ -104,21 +113,21 @@ pub const DEFAULT_KAIMING_NORMAL: Init = Init::Kaiming {
 pub fn f_init(i: Init, dims: &[i64], device: Device, kind: Kind) -> Result<Tensor, TchError> {
     match i {
         Init::Const(cst) => {
-            // Optimize the case for which a single C++ code can be done.
+            // Optimize the case for which a single C++ call can be done.
             if cst == 0. {
                 Tensor::f_zeros(dims, (kind, device))
             } else if (cst - 1.).abs() <= f64::EPSILON {
                 Tensor::f_ones(dims, (kind, device))
             } else {
-                Tensor::f_ones(dims, (kind, device)).map(|t| t * cst)
+                Tensor::f_full(dims, cst, (kind, device))
             }
         }
-        Init::Uniform { lo, up } => Tensor::f_zeros(dims, (kind, device))?.f_uniform_(lo, up),
+        Init::Uniform { lo, up } => Tensor::f_empty(dims, (kind, device))?.f_uniform_(lo, up),
         Init::Randn { mean, stdev } => {
             if mean == 0. && (stdev - 1.).abs() <= f64::EPSILON {
                 Tensor::f_randn(dims, (kind, device))
             } else {
-                Tensor::f_randn(dims, (kind, device)).map(|t| t * stdev + mean)
+                Tensor::f_empty(dims, (kind, device))?.f_normal_(mean, stdev)
             }
         }
         Init::Kaiming { dist, fan, non_linearity } => {
@@ -128,11 +137,10 @@ pub fn f_init(i: Init, dims: &[i64], device: Device, kind: Kind) -> Result<Tenso
             match dist {
                 NormalOrUniform::Uniform => {
                     let bound = 3f64.sqrt() * std;
-                    Tensor::f_zeros(dims, (kind, device))?.f_uniform_(-bound, bound)
+                    Tensor::f_empty(dims, (kind, device))?.f_uniform_(-bound, bound)
                 }
                 NormalOrUniform::Normal => {
-                    let randn = Tensor::f_randn(dims, (kind, device))?;
-                    Ok(randn * std)
+                    Tensor::f_empty(dims, (kind, device))?.f_normal_(0., std)
                 }
             }
         }
@@ -187,12 +195,12 @@ impl Init {
                         let _ = tensor.uniform_(-bound, bound);
                     }
                     NormalOrUniform::Normal => {
-                        tensor.copy_(&(tensor.randn_like() * std));
+                        let _ = tensor.normal_(0., std);
                     }
                 }
             }
             Init::Randn { mean, stdev } => {
-                tensor.copy_(&(tensor.randn_like() * stdev + mean));
+                let _ = tensor.normal_(mean, stdev);
             }
             Init::Orthogonal { gain } => {
                 let q =

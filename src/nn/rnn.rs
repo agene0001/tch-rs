@@ -59,8 +59,11 @@ pub struct RNNConfig {
     pub train: bool,
     pub bidirectional: bool,
     pub batch_first: bool,
-    pub w_ih_init: super::Init,
-    pub w_hh_init: super::Init,
+    /// Weight/bias initializations; `None` uses the PyTorch default of
+    /// `Uniform(-1/sqrt(hidden_dim), 1/sqrt(hidden_dim))` for every
+    /// weight and bias tensor.
+    pub w_ih_init: Option<super::Init>,
+    pub w_hh_init: Option<super::Init>,
     pub b_ih_init: Option<super::Init>,
     pub b_hh_init: Option<super::Init>,
 }
@@ -74,10 +77,10 @@ impl Default for RNNConfig {
             train: true,
             bidirectional: false,
             batch_first: true,
-            w_ih_init: super::init::DEFAULT_KAIMING_UNIFORM,
-            w_hh_init: super::init::DEFAULT_KAIMING_UNIFORM,
-            b_ih_init: Some(super::Init::Const(0.)),
-            b_hh_init: Some(super::Init::Const(0.)),
+            w_ih_init: None,
+            w_hh_init: None,
+            b_ih_init: None,
+            b_hh_init: None,
         }
     }
 }
@@ -91,6 +94,14 @@ fn rnn_weights<'a, T: Borrow<super::Path<'a>>>(
     c: RNNConfig,
 ) -> Vec<Tensor> {
     let vs = vs.borrow();
+    // PyTorch initializes every RNN weight and bias from
+    // U(-1/sqrt(hidden_dim), 1/sqrt(hidden_dim)).
+    let bound = 1.0 / (hidden_dim.max(1) as f64).sqrt();
+    let default_init = super::Init::Uniform { lo: -bound, up: bound };
+    let w_ih_init = c.w_ih_init.unwrap_or(default_init);
+    let w_hh_init = c.w_hh_init.unwrap_or(default_init);
+    let b_ih_init = c.b_ih_init.unwrap_or(default_init);
+    let b_hh_init = c.b_hh_init.unwrap_or(default_init);
     let mut flat_weights = vec![];
     for layer_idx in 0..c.num_layers {
         for direction_idx in 0..num_directions {
@@ -99,26 +110,20 @@ fn rnn_weights<'a, T: Borrow<super::Path<'a>>>(
             let w_ih = vs.var(
                 &format!("weight_ih_l{layer_idx}{suffix}"),
                 &[gate_dim, in_dim],
-                c.w_ih_init,
+                w_ih_init,
             );
             let w_hh = vs.var(
                 &format!("weight_hh_l{layer_idx}{suffix}"),
                 &[gate_dim, hidden_dim],
-                c.w_hh_init,
+                w_hh_init,
             );
             flat_weights.push(w_ih);
             flat_weights.push(w_hh);
             if c.has_biases {
-                let b_ih = vs.var(
-                    &format!("bias_ih_l{layer_idx}{suffix}"),
-                    &[gate_dim],
-                    c.b_ih_init.unwrap(),
-                );
-                let b_hh = vs.var(
-                    &format!("bias_hh_l{layer_idx}{suffix}"),
-                    &[gate_dim],
-                    c.b_hh_init.unwrap(),
-                );
+                let b_ih =
+                    vs.var(&format!("bias_ih_l{layer_idx}{suffix}"), &[gate_dim], b_ih_init);
+                let b_hh =
+                    vs.var(&format!("bias_hh_l{layer_idx}{suffix}"), &[gate_dim], b_hh_init);
                 flat_weights.push(b_ih);
                 flat_weights.push(b_hh);
             }
@@ -154,7 +159,7 @@ pub fn lstm<'a, T: Borrow<super::Path<'a>>>(
     if vs.device().is_cuda() && crate::Cuda::cudnn_is_available() {
         let _ = Tensor::internal_cudnn_rnn_flatten_weight(
             &flat_weights,
-            4,
+            if c.has_biases { 4 } else { 2 }, /* see _flat_weights in pytorch rnn.py */
             in_dim,
             2, /* 2 for LSTM see rnn.cpp in pytorch */
             hidden_dim,
@@ -174,8 +179,12 @@ impl RNN for LSTM {
         let num_directions = if self.config.bidirectional { 2 } else { 1 };
         let layer_dim = self.config.num_layers * num_directions;
         let shape = [layer_dim, batch_dim, self.hidden_dim];
-        let zeros = Tensor::zeros(shape, (self.flat_weights[0].kind(), self.device));
-        LSTMState((zeros.shallow_clone(), zeros.shallow_clone()))
+        // h and c must not share storage: an in-place update of one state
+        // tensor should never silently modify the other.
+        let kind = self.flat_weights[0].kind();
+        let h = Tensor::zeros(shape, (kind, self.device));
+        let c = Tensor::zeros(shape, (kind, self.device));
+        LSTMState((h, c))
     }
 
     fn step(&self, input: &Tensor, in_state: &LSTMState) -> LSTMState {
@@ -239,7 +248,7 @@ pub fn gru<'a, T: Borrow<super::Path<'a>>>(
     if vs.device().is_cuda() && crate::Cuda::cudnn_is_available() {
         let _ = Tensor::internal_cudnn_rnn_flatten_weight(
             &flat_weights,
-            4,
+            if c.has_biases { 4 } else { 2 }, /* see _flat_weights in pytorch rnn.py */
             in_dim,
             3, /* 3 for GRU see rnn.cpp in pytorch */
             hidden_dim,

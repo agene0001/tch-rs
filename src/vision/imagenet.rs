@@ -3,24 +3,28 @@ use super::dataset::Dataset;
 use crate::{kind, Device, Kind, TchError, Tensor};
 use std::io;
 use std::path::Path;
-use std::sync::Mutex;
 
-lazy_static! {
-    static ref IMAGENET_MEAN: Mutex<Tensor> =
-        Mutex::new(Tensor::from_slice(&[0.485f32, 0.456, 0.406]).view((3, 1, 1)));
-    static ref IMAGENET_STD: Mutex<Tensor> =
-        Mutex::new(Tensor::from_slice(&[0.229f32, 0.224, 0.225]).view((3, 1, 1)));
+const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+// Builds the broadcastable mean/std constants on the same device as the
+// input. Creating them per call replaces the previous global Mutex-guarded
+// CPU tensors, which serialized concurrent callers and could not be used
+// with inputs on other devices.
+fn mean_and_std(tensor: &Tensor) -> Result<(Tensor, Tensor), TchError> {
+    let device = tensor.device();
+    let mean = Tensor::f_from_slice(&IMAGENET_MEAN)?.f_view([3, 1, 1])?.f_to_device(device)?;
+    let std = Tensor::f_from_slice(&IMAGENET_STD)?.f_view([3, 1, 1])?.f_to_device(device)?;
+    Ok((mean, std))
 }
 
 pub fn normalize(tensor: &Tensor) -> Result<Tensor, TchError> {
-    let mean = IMAGENET_MEAN.lock().unwrap();
-    let std = IMAGENET_STD.lock().unwrap();
+    let (mean, std) = mean_and_std(tensor)?;
     (tensor.to_kind(Kind::Float) / 255.0).f_sub(&mean)?.f_div(&std)
 }
 
 pub fn unnormalize(tensor: &Tensor) -> Result<Tensor, TchError> {
-    let mean = IMAGENET_MEAN.lock().unwrap();
-    let std = IMAGENET_STD.lock().unwrap();
+    let (mean, std) = mean_and_std(tensor)?;
     let tensor = (tensor.f_mul(&std)?.f_add(&mean)? * 255.0).clamp(0., 255.0).to_kind(Kind::Uint8);
     Ok(tensor)
 }

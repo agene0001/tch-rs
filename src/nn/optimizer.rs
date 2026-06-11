@@ -237,14 +237,19 @@ impl Optimizer {
                     norms.push(grad.norm());
                 }
             }
-            let total_norm = f64::try_from(Tensor::stack(&norms, 0).norm()).unwrap();
-            let clip_coef = max / (total_norm + 1e-6);
-            if clip_coef < 1.0 {
-                for var in v.trainable_variables.iter() {
-                    let mut grad = var.tensor.grad();
-                    if grad.defined() {
-                        let _t = grad.g_mul_scalar_(clip_coef);
-                    }
+            if norms.is_empty() {
+                return;
+            }
+            // Keep the clip coefficient on device and clamp it at 1 instead
+            // of reading the norm back: a host read would synchronize the
+            // CUDA stream on every step. Multiplying by an exact 1.0 leaves
+            // unclipped gradients bit-identical.
+            let total_norm = Tensor::stack(&norms, 0).norm();
+            let clip_coef = (max / (total_norm + 1e-6)).clamp_max(1.0);
+            for var in v.trainable_variables.iter() {
+                let mut grad = var.tensor.grad();
+                if grad.defined() {
+                    let _t = grad.g_mul_(&clip_coef.to_device(grad.device()));
                 }
             }
         })

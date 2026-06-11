@@ -49,7 +49,9 @@ pub struct ConvConfigND<ND> {
     pub groups: i64,
     pub bias: bool,
     pub ws_init: super::Init,
-    pub bs_init: super::Init,
+    /// Bias initialization; `None` uses the PyTorch default of
+    /// `Uniform(-1/sqrt(fan_in), 1/sqrt(fan_in))`.
+    pub bs_init: Option<super::Init>,
     pub padding_mode: PaddingMode,
 }
 
@@ -65,7 +67,7 @@ impl Default for ConvConfig {
             groups: 1,
             bias: true,
             ws_init: super::init::DEFAULT_KAIMING_UNIFORM,
-            bs_init: super::Init::Const(0.),
+            bs_init: None,
             padding_mode: PaddingMode::Zeros,
         }
     }
@@ -80,7 +82,7 @@ impl Default for ConvConfigND<[i64; 2]> {
             groups: 1,
             bias: true,
             ws_init: super::init::DEFAULT_KAIMING_UNIFORM,
-            bs_init: super::Init::Const(0.),
+            bs_init: None,
             padding_mode: PaddingMode::Zeros,
         }
     }
@@ -119,7 +121,16 @@ pub fn conv<'a, ND: std::convert::AsRef<[i64]>, T: Borrow<super::Path<'a>>>(
     config: ConvConfigND<ND>,
 ) -> Conv<ND> {
     let vs = vs.borrow();
-    let bs = if config.bias { Some(vs.var("bias", &[out_dim], config.bs_init)) } else { None };
+    let bs = if config.bias {
+        let bs_init = config.bs_init.unwrap_or_else(|| {
+            let fan_in = (in_dim / config.groups) * ksizes.as_ref().iter().product::<i64>();
+            let bound = 1.0 / (fan_in.max(1) as f64).sqrt();
+            super::Init::Uniform { lo: -bound, up: bound }
+        });
+        Some(vs.var("bias", &[out_dim], bs_init))
+    } else {
+        None
+    };
     let mut weight_size = vec![out_dim, in_dim / config.groups];
     weight_size.extend(ksizes.as_ref().iter());
     let ws = vs.var("weight", weight_size.as_slice(), config.ws_init);

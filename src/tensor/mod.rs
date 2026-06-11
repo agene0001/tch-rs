@@ -163,7 +163,10 @@ impl Tensor {
 impl Tensor {
     /// Computes the cross-entropy loss based on some logits and targets.
     pub fn cross_entropy_for_logits(&self, targets: &Tensor) -> Tensor {
-        self.log_softmax(-1, Kind::Float).nll_loss(targets)
+        // The fused op avoids a separate log_softmax kernel and, unlike the
+        // previous `log_softmax(-1, Kind::Float)` formulation, does not
+        // silently downcast Double logits to Float.
+        self.cross_entropy_loss::<Tensor>(targets, None, Reduction::Mean, -100, 0.)
     }
 
     /// Returns the average accuracy for some given logits assuming that
@@ -232,7 +235,8 @@ impl Tensor {
 
     /// Copies a tensor to a newly allocated tensor using the same shape and device.
     pub fn copy(&self) -> Tensor {
-        let mut result = self.zeros_like();
+        // empty_like skips the redundant zero-fill that copy_ would overwrite.
+        let mut result = self.empty_like();
         result.copy_(self);
         result
     }

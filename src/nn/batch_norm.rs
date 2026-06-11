@@ -20,7 +20,10 @@ impl Default for BatchNormConfig {
             eps: 1e-5,
             momentum: 0.1,
             affine: true,
-            ws_init: super::Init::Uniform { lo: 0., up: 1. },
+            // PyTorch initializes the batch-norm gain to ones (and bias to
+            // zeros); the historical Uniform(0, 1) gain dates back to old
+            // pre-0.4 PyTorch behavior and hurts early training.
+            ws_init: super::Init::Const(1.),
             bs_init: super::Init::Const(0.),
         }
     }

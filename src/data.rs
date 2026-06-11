@@ -17,6 +17,11 @@ pub struct Iter2 {
     device: Device,
     return_smaller_last_batch: bool,
     pin_memory: bool,
+    // When set, batches are gathered through this permutation instead of
+    // slicing sequentially. Keeping the permutation rather than materializing
+    // shuffled copies of xs/ys avoids holding a second full copy of the
+    // dataset in memory.
+    shuffle_index: Option<Tensor>,
 }
 
 impl Iter2 {
@@ -49,6 +54,7 @@ impl Iter2 {
             device: Device::Cpu,
             return_smaller_last_batch: false,
             pin_memory: false,
+            shuffle_index: None,
         })
     }
 
@@ -73,9 +79,8 @@ impl Iter2 {
     /// The iterator would still run over the whole dataset but the order in
     /// which elements are grouped in mini-batches is randomized.
     pub fn shuffle(&mut self) -> &mut Iter2 {
-        let index = Tensor::randperm(self.total_size, (Kind::Int64, self.device));
-        self.xs = self.xs.index_select(0, &index);
-        self.ys = self.ys.index_select(0, &index);
+        self.shuffle_index =
+            Some(Tensor::randperm(self.total_size, (Kind::Int64, self.xs.device())));
         self
     }
 
@@ -117,8 +122,16 @@ impl Iterator for Iter2 {
             None
         } else {
             self.batch_index += 1;
-            let xs = self.xs.i(start..start + size);
-            let ys = self.ys.i(start..start + size);
+            let (xs, ys) = match &self.shuffle_index {
+                None => (self.xs.i(start..start + size), self.ys.i(start..start + size)),
+                Some(index) => {
+                    let batch_index = index.i(start..start + size);
+                    (
+                        self.xs.index_select(0, &batch_index),
+                        self.ys.index_select(0, &batch_index),
+                    )
+                }
+            };
             match self.device {
                 // Pin the batch then issue a non-blocking transfer so the copy
                 // can overlap with host-side work. Pinning only pays off for
