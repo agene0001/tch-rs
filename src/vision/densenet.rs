@@ -75,7 +75,10 @@ fn densenet(
         }
     }
     seq.add(nn::batch_norm2d(&fp / "norm5", nfeat, Default::default()))
-        .add_fn(|xs| xs.relu().avg_pool2d([7, 7], [1, 1], [0, 0], false, true, 1).flat_view())
+        // Adaptive pooling matches torchvision and keeps the model usable for
+        // inputs other than 224x224 (identical to the previous fixed 7x7
+        // average pooling at 224x224).
+        .add_fn(|xs| xs.relu().adaptive_avg_pool2d([1, 1]).flat_view())
         .add(nn::linear(p / "classifier", nfeat, c_out, Default::default()))
 }
 

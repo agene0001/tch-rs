@@ -2,9 +2,6 @@
 use crate::nn::{self, ConvConfig, Module, ModuleT};
 use crate::Tensor;
 
-const BATCH_NORM_MOMENTUM: f64 = 0.99;
-const BATCH_NORM_EPSILON: f64 = 1e-3;
-
 // Based on the Python version from torchvision.
 // https://github.com/pytorch/vision/blob/0d75d9e5516f446c9c0ef93bd4ed9fea13992d06/torchvision/models/efficientnet.py#L47
 #[derive(Debug, Clone, Copy)]
@@ -79,57 +76,30 @@ impl MBConvConfig {
     }
 }
 
-/// Conv2D with same padding.
-#[derive(Debug)]
-struct Conv2DSame {
-    conv2d: nn::Conv2D,
-    s: i64,
-    k: i64,
-}
-
-impl Conv2DSame {
-    fn new(vs: nn::Path, i: i64, o: i64, k: i64, stride: i64, groups: i64, b: bool) -> Self {
-        let conv_config = nn::ConvConfig { stride, groups, bias: b, ..Default::default() };
-        let conv2d = nn::conv2d(vs, i, o, k, conv_config);
-        Self { conv2d, s: stride, k }
-    }
-}
-
-impl Module for Conv2DSame {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        let s = self.s;
-        let k = self.k;
-        let size = xs.size();
-        let ih = size[2];
-        let iw = size[3];
-        let oh = (ih + s - 1) / s;
-        let ow = (iw + s - 1) / s;
-        let pad_h = i64::max((oh - 1) * s + k - ih, 0);
-        let pad_w = i64::max((ow - 1) * s + k - iw, 0);
-        if pad_h > 0 || pad_w > 0 {
-            xs.zero_pad2d(pad_w / 2, pad_w - pad_w / 2, pad_h / 2, pad_h - pad_h / 2)
-                .apply(&self.conv2d)
-        } else {
-            xs.apply(&self.conv2d)
-        }
-    }
-}
-
 #[derive(Debug)]
 struct ConvNormActivation {
-    conv2d: Conv2DSame,
+    conv2d: nn::Conv2D,
     bn2d: nn::BatchNorm,
     activation: bool,
 }
 
 impl ConvNormActivation {
-    fn new(vs: nn::Path, i: i64, o: i64, k: i64, stride: i64, groups: i64) -> Self {
-        let conv2d = Conv2DSame::new(&vs / 0, i, o, k, stride, groups, false);
-        let bn_config = nn::BatchNormConfig {
-            momentum: 1.0 - BATCH_NORM_MOMENTUM,
-            eps: BATCH_NORM_EPSILON,
-            ..Default::default()
-        };
+    fn new(
+        vs: nn::Path,
+        i: i64,
+        o: i64,
+        k: i64,
+        stride: i64,
+        groups: i64,
+        bn_config: nn::BatchNormConfig,
+    ) -> Self {
+        // torchvision's Conv2dNormActivation uses a fixed symmetric padding
+        // of (k - 1) / 2 rather than TF-style dynamic "same" padding. The two
+        // differ on stride-2 convolutions (asymmetric 0/1 vs symmetric 1/1),
+        // so the dynamic variant misaligns torchvision-exported weights.
+        let conv_config =
+            nn::ConvConfig { stride, groups, bias: false, padding: (k - 1) / 2, ..Default::default() };
+        let conv2d = nn::conv2d(&vs / 0, i, o, k, conv_config);
         let bn2d = nn::batch_norm2d(&vs / 1, o, bn_config);
         Self { conv2d, bn2d, activation: true }
     }
@@ -143,7 +113,7 @@ impl ModuleT for ConvNormActivation {
     fn forward_t(&self, xs: &Tensor, t: bool) -> Tensor {
         let xs = xs.apply(&self.conv2d).apply_t(&self.bn2d, t);
         if self.activation {
-            xs.swish()
+            xs.silu()
         } else {
             xs
         }
@@ -152,26 +122,22 @@ impl ModuleT for ConvNormActivation {
 
 #[derive(Debug)]
 struct SqueezeExcitation {
-    fc1: Conv2DSame,
-    fc2: Conv2DSame,
+    fc1: nn::Conv2D,
+    fc2: nn::Conv2D,
 }
 
 impl SqueezeExcitation {
     fn new(vs: nn::Path, input_channels: i64, squeeze_channels: i64) -> Self {
-        let fc1 = Conv2DSame::new(&vs / "fc1", input_channels, squeeze_channels, 1, 1, 1, true);
-        let fc2 = Conv2DSame::new(&vs / "fc2", squeeze_channels, input_channels, 1, 1, 1, true);
+        let fc1 = nn::conv2d(&vs / "fc1", input_channels, squeeze_channels, 1, Default::default());
+        let fc2 = nn::conv2d(&vs / "fc2", squeeze_channels, input_channels, 1, Default::default());
         Self { fc1, fc2 }
     }
 }
 
-impl ModuleT for SqueezeExcitation {
-    fn forward_t(&self, xs: &Tensor, t: bool) -> Tensor {
-        let scale = xs
-            .adaptive_avg_pool2d([1, 1])
-            .apply_t(&self.fc1, t)
-            .swish()
-            .apply_t(&self.fc2, t)
-            .sigmoid();
+impl Module for SqueezeExcitation {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        let scale =
+            xs.adaptive_avg_pool2d([1, 1]).apply(&self.fc1).silu().apply(&self.fc2).sigmoid();
         scale * xs
     }
 }
@@ -183,27 +149,42 @@ struct MBConv {
     squeeze_excitation: SqueezeExcitation,
     project_cna: ConvNormActivation,
     config: MBConvConfig,
+    // torchvision linearly scales the drop probability from 0 to
+    // stochastic_depth_prob (0.2) over the blocks; active in training only.
+    stochastic_depth_prob: f64,
 }
 
 impl MBConv {
-    fn new(vs: nn::Path, c: MBConvConfig) -> Self {
+    fn new(
+        vs: nn::Path,
+        c: MBConvConfig,
+        stochastic_depth_prob: f64,
+        bn_config: nn::BatchNormConfig,
+    ) -> Self {
         let vs = &vs / "block";
         let exp = make_divisible(c.input_channels as f64 * c.expand_ratio, 8);
         let expand_cna = if exp != c.input_channels {
-            Some(ConvNormActivation::new(&vs / 0, c.input_channels, exp, 1, 1, 1))
+            Some(ConvNormActivation::new(&vs / 0, c.input_channels, exp, 1, 1, 1, bn_config))
         } else {
             None
         };
         let start_index = if expand_cna.is_some() { 1 } else { 0 };
         let depthwise_cna =
-            ConvNormActivation::new(&vs / start_index, exp, exp, c.kernel, c.stride, exp);
+            ConvNormActivation::new(&vs / start_index, exp, exp, c.kernel, c.stride, exp, bn_config);
         let squeeze_channels = i64::max(1, c.input_channels / 4);
         let squeeze_excitation =
             SqueezeExcitation::new(&vs / (start_index + 1), exp, squeeze_channels);
         let project_cna =
-            ConvNormActivation::new(&vs / (start_index + 2), exp, c.out_channels, 1, 1, 1)
+            ConvNormActivation::new(&vs / (start_index + 2), exp, c.out_channels, 1, 1, 1, bn_config)
                 .no_activation();
-        Self { expand_cna, depthwise_cna, squeeze_excitation, project_cna, config: c }
+        Self {
+            expand_cna,
+            depthwise_cna,
+            squeeze_excitation,
+            project_cna,
+            config: c,
+            stochastic_depth_prob,
+        }
     }
 }
 
@@ -217,19 +198,24 @@ impl ModuleT for MBConv {
         };
         let ys = ys
             .apply_t(&self.depthwise_cna, t)
-            .apply_t(&self.squeeze_excitation, t)
+            .apply(&self.squeeze_excitation)
             .apply_t(&self.project_cna, t);
         if use_res_connect {
+            // Row-mode stochastic depth: drop the whole residual branch per
+            // sample with probability p, rescaling kept rows by 1/(1 - p).
+            let ys = if t && self.stochastic_depth_prob > 0. {
+                let survival = 1.0 - self.stochastic_depth_prob;
+                let noise = Tensor::rand([ys.size()[0], 1, 1, 1], (ys.kind(), ys.device()))
+                    .lt(survival)
+                    .to_kind(ys.kind());
+                ys * noise / survival
+            } else {
+                ys
+            };
             ys + xs
         } else {
             ys
         }
-    }
-}
-
-impl Tensor {
-    fn swish(&self) -> Tensor {
-        self * self.sigmoid()
     }
 }
 
@@ -239,17 +225,26 @@ struct EfficientNet {
     blocks: Vec<MBConv>,
     final_cna: ConvNormActivation,
     classifier: nn::Linear,
+    dropout: f64,
 }
 
 impl EfficientNet {
-    fn new(p: &nn::Path, configs: Vec<MBConvConfig>, nclasses: i64) -> Self {
+    fn new(
+        p: &nn::Path,
+        configs: Vec<MBConvConfig>,
+        dropout: f64,
+        bn_config: nn::BatchNormConfig,
+        nclasses: i64,
+    ) -> Self {
         let f_p = p / "features";
         let first_in_c = configs[0].input_channels;
         let last_out_c = configs.last().unwrap().out_channels;
         let final_out_c = 4 * last_out_c;
-        let init_cna = ConvNormActivation::new(&f_p / 0, 3, first_in_c, 3, 2, 1);
+        let init_cna = ConvNormActivation::new(&f_p / 0, 3, first_in_c, 3, 2, 1, bn_config);
         let nconfigs = configs.len();
+        let total_blocks: usize = configs.iter().map(|c| c.num_layers).sum();
         let mut blocks = vec![];
+        let mut block_id = 0usize;
         for (index, cnf) in configs.into_iter().enumerate() {
             let f_p = &f_p / (index + 1);
             for r_index in 0..cnf.num_layers {
@@ -258,14 +253,16 @@ impl EfficientNet {
                 } else {
                     MBConvConfig { input_channels: cnf.out_channels, stride: 1, ..cnf }
                 };
-                blocks.push(MBConv::new(&f_p / r_index, cnf))
+                let sd_prob = 0.2 * block_id as f64 / total_blocks as f64;
+                blocks.push(MBConv::new(&f_p / r_index, cnf, sd_prob, bn_config));
+                block_id += 1;
             }
         }
         let final_cna =
-            ConvNormActivation::new(&f_p / (nconfigs + 1), last_out_c, final_out_c, 1, 1, 1);
+            ConvNormActivation::new(&f_p / (nconfigs + 1), last_out_c, final_out_c, 1, 1, 1, bn_config);
         let classifier =
             nn::linear(p / "classifier" / 1, final_out_c, nclasses, Default::default());
-        Self { init_cna, blocks, final_cna, classifier }
+        Self { init_cna, blocks, final_cna, classifier, dropout }
     }
 }
 
@@ -279,33 +276,40 @@ impl ModuleT for EfficientNet {
             .adaptive_avg_pool2d([1, 1])
             .squeeze_dim(-1)
             .squeeze_dim(-1)
+            .dropout(self.dropout, t)
             .apply(&self.classifier)
     }
 }
 
+// b0-b4 use the default BatchNorm parameters in torchvision; only b5/b6/b7
+// override them with eps=1e-3 and momentum=0.01.
+fn bn_b5_to_b7() -> nn::BatchNormConfig {
+    nn::BatchNormConfig { eps: 1e-3, momentum: 0.01, ..Default::default() }
+}
+
 pub fn b0(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b0(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b0(), 0.2, Default::default(), nclasses)
 }
 pub fn b1(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b1(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b1(), 0.2, Default::default(), nclasses)
 }
 pub fn b2(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b2(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b2(), 0.3, Default::default(), nclasses)
 }
 pub fn b3(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b3(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b3(), 0.3, Default::default(), nclasses)
 }
 pub fn b4(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b4(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b4(), 0.4, Default::default(), nclasses)
 }
 pub fn b5(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b5(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b5(), 0.4, bn_b5_to_b7(), nclasses)
 }
 pub fn b6(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b6(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b6(), 0.5, bn_b5_to_b7(), nclasses)
 }
 pub fn b7(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    EfficientNet::new(p, MBConvConfig::b7(), nclasses)
+    EfficientNet::new(p, MBConvConfig::b7(), 0.5, bn_b5_to_b7(), nclasses)
 }
 
 #[allow(clippy::many_single_char_names)]

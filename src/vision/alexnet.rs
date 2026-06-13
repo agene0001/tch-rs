@@ -15,7 +15,11 @@ fn features(p: nn::Path) -> impl ModuleT {
     nn::seq_t()
         .add(conv2d(&p / "0", 3, 64, 11, 2, 4))
         .add_fn(|xs| max_pool2d(xs.relu(), 3, 2))
-        .add(conv2d(&p / "3", 64, 192, 5, 1, 2))
+        // 5x5 convolution with padding 2 and stride 1: the previous
+        // padding=1/stride=2 had the two arguments swapped, which kept the
+        // weight shapes loadable but produced a very different geometry from
+        // the torchvision model the pretrained weights come from.
+        .add(conv2d(&p / "3", 64, 192, 5, 2, 1))
         .add_fn(|xs| max_pool2d(xs.relu(), 3, 2))
         .add(conv2d(&p / "6", 192, 384, 3, 1, 1))
         .add_fn(|xs| xs.relu())

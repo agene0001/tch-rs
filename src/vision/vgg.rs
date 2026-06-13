@@ -57,7 +57,10 @@ fn vgg(p: &nn::Path, cfg: Vec<Vec<i64>>, nclasses: i64, batch_norm: bool) -> Seq
         }
         seq = seq.add_fn(|xs| xs.max_pool2d_default(2));
     }
-    seq.add_fn(|xs| xs.flat_view())
+    // torchvision applies an adaptive 7x7 average pooling between the
+    // features and the classifier; this is the identity for 224x224 inputs
+    // but keeps other input sizes working.
+    seq.add_fn(|xs| xs.adaptive_avg_pool2d([7, 7]).flat_view())
         .add(nn::linear(&c / "0", 512 * 7 * 7, 4096, Default::default()))
         .add_fn(|xs| xs.relu())
         .add_fn_t(|xs, train| xs.dropout(0.5, train))
