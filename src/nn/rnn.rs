@@ -17,8 +17,10 @@ pub trait RNN {
 
     /// Applies multiple steps of the recurrent network.
     ///
-    /// The input should have dimensions [batch_size, seq_len, features].
-    /// The initial state is the result of applying zero_state.
+    /// The input should have dimensions [batch_size, seq_len, features]
+    /// when `batch_first` is set (the default), [seq_len, batch_size,
+    /// features] otherwise. The initial state is the result of applying
+    /// zero_state.
     fn seq(&self, input: &Tensor) -> (Tensor, Self::State) {
         let batch_dim = input.size()[0];
         let state = self.zero_state(batch_dim);
@@ -27,7 +29,9 @@ pub trait RNN {
 
     /// Applies multiple steps of the recurrent network.
     ///
-    /// The input should have dimensions [batch_size, seq_len, features].
+    /// The input should have dimensions [batch_size, seq_len, features]
+    /// when `batch_first` is set (the default), [seq_len, batch_size,
+    /// features] otherwise.
     fn seq_init(&self, input: &Tensor, state: &Self::State) -> (Tensor, Self::State);
 }
 
@@ -187,8 +191,16 @@ impl RNN for LSTM {
         LSTMState((h, c))
     }
 
+    fn seq(&self, input: &Tensor) -> (Tensor, LSTMState) {
+        // The batch dimension comes second when batch_first is unset.
+        let batch_dim = if self.config.batch_first { input.size()[0] } else { input.size()[1] };
+        let state = self.zero_state(batch_dim);
+        self.seq_init(input, &state)
+    }
+
     fn step(&self, input: &Tensor, in_state: &LSTMState) -> LSTMState {
-        let input = input.unsqueeze(1);
+        // Insert the singleton sequence dimension where the layout expects it.
+        let input = input.unsqueeze(if self.config.batch_first { 1 } else { 0 });
         let (_output, state) = self.seq_init(&input, in_state);
         state
     }
@@ -271,8 +283,16 @@ impl RNN for GRU {
         GRUState(Tensor::zeros(shape, (self.flat_weights[0].kind(), self.device)))
     }
 
+    fn seq(&self, input: &Tensor) -> (Tensor, GRUState) {
+        // The batch dimension comes second when batch_first is unset.
+        let batch_dim = if self.config.batch_first { input.size()[0] } else { input.size()[1] };
+        let state = self.zero_state(batch_dim);
+        self.seq_init(input, &state)
+    }
+
     fn step(&self, input: &Tensor, in_state: &GRUState) -> GRUState {
-        let input = input.unsqueeze(1);
+        // Insert the singleton sequence dimension where the layout expects it.
+        let input = input.unsqueeze(if self.config.batch_first { 1 } else { 0 });
         let (_output, state) = self.seq_init(&input, in_state);
         state
     }

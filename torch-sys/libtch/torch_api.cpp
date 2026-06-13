@@ -87,7 +87,9 @@ tensor at_tensor_of_blob(void *data, int64_t *dims, size_t ndims,
 tensor at_tensor_of_data(void *vs, int64_t *dims, size_t ndims,
                          size_t element_size_in_bytes, int type) {
   PROTECT(
-      torch::Tensor tensor = torch::zeros(torch::IntArrayRef(dims, ndims),
+      // The memcpy below overwrites every element, so skip the zero-fill
+      // that torch::zeros would perform on the freshly allocated buffer.
+      torch::Tensor tensor = torch::empty(torch::IntArrayRef(dims, ndims),
                                           torch::ScalarType(type));
       if ((int64_t)element_size_in_bytes != tensor.element_size()) throw std::
           invalid_argument("incoherent element sizes in bytes");

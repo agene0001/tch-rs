@@ -208,7 +208,9 @@ impl Tensor {
     }
 
     pub fn avg_pool2d_default(&self, ksize: i64) -> Tensor {
-        self.avg_pool2d([ksize, ksize], [ksize, ksize], [0, 0], false, true, 1)
+        // No divisor override: passing Some(1) here made the "average" pool
+        // sum its window instead of dividing by the kernel area.
+        self.avg_pool2d([ksize, ksize], [ksize, ksize], [0, 0], false, true, None::<i64>)
     }
 
     pub fn max_pool2d_default(&self, ksize: i64) -> Tensor {
@@ -242,13 +244,23 @@ impl Tensor {
     }
 
     /// Copies the data from a two dimensional slice in a tensor object.
+    ///
+    /// Panics if the rows do not all have the same length.
     pub fn from_slice2<T, U>(v: &[U]) -> Tensor
     where
         T: crate::kind::Element,
         U: AsRef<[T]>,
     {
-        let inner: Vec<Tensor> = v.iter().map(|v| Tensor::from_slice(v.as_ref())).collect();
-        Tensor::stack(&inner, 0)
+        // A single flattened copy instead of one tensor per row plus a stack.
+        let rows = v.len();
+        let cols = v.first().map_or(0, |row| row.as_ref().len());
+        let mut flat = Vec::with_capacity(rows * cols);
+        for row in v {
+            let row = row.as_ref();
+            assert_eq!(row.len(), cols, "from_slice2: rows must all have {cols} elements");
+            flat.extend_from_slice(row);
+        }
+        Tensor::from_slice(&flat).view([rows as i64, cols as i64])
     }
 
     pub fn to_mkldnn(&self) -> Tensor {

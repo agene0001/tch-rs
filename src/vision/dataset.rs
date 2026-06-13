@@ -1,6 +1,6 @@
 //! A simple dataset structure shared by various computer vision datasets.
 use crate::data::Iter2;
-use crate::{IndexOp, Tensor};
+use crate::{IndexOp, Kind, Tensor};
 use rand::Rng;
 
 #[derive(Debug)]
@@ -30,14 +30,12 @@ pub fn random_flip(t: &Tensor) -> Tensor {
     if size.len() != 4 {
         panic!("unexpected shape for tensor {t:?}")
     }
-    let output = t.zeros_like();
-    for batch_index in 0..size[0] {
-        let mut output_view = output.i(batch_index);
-        let t_view = t.i(batch_index);
-        let src = if rand::random() { t_view } else { t_view.flip([2]) };
-        output_view.copy_(&src)
-    }
-    output
+    // Flip the whole batch once and pick per-sample between the flipped and
+    // original images with a broadcast mask: two kernels instead of a
+    // narrow/flip/copy_ sequence per sample. Drawing the mask from the torch
+    // RNG also makes the augmentation reproducible under crate::manual_seed.
+    let mask = Tensor::rand([size[0], 1, 1, 1], (Kind::Float, t.device())).lt(0.5);
+    t.flip([3]).where_self(&mask, t)
 }
 
 /// Pad the image using reflections and take some random crops.
@@ -51,11 +49,16 @@ pub fn random_crop(t: &Tensor, pad: i64) -> Tensor {
     let sz_h = size[2];
     let sz_w = size[3];
     let padded = t.reflection_pad2d([pad, pad, pad, pad]);
-    let output = t.zeros_like();
+    // Every output slot is fully overwritten below so the zero-fill of
+    // zeros_like would be redundant.
+    let output = t.empty_like();
     for bindex in 0..size[0] {
         let mut output_view = output.i(bindex);
-        let start_w = rand::thread_rng().gen_range(0..2 * pad);
-        let start_h = rand::thread_rng().gen_range(0..2 * pad);
+        // The padded image is sz + 2*pad high/wide so the valid crop offsets
+        // are 0..=2*pad: an exclusive upper bound would never sample the
+        // bottom/right-most crop and panics for pad=0.
+        let start_w = rand::thread_rng().gen_range(0..=2 * pad);
+        let start_h = rand::thread_rng().gen_range(0..=2 * pad);
         let src = padded.i((bindex, .., start_h..start_h + sz_h, start_w..start_w + sz_w));
         output_view.copy_(&src)
     }
@@ -69,8 +72,7 @@ pub fn random_cutout(t: &Tensor, sz: i64) -> Tensor {
     if size.len() != 4 || sz > size[2] || sz > size[3] {
         panic!("unexpected shape for tensor {t:?} {sz}")
     }
-    let mut output = t.zeros_like();
-    output.copy_(t);
+    let output = t.copy();
     for bindex in 0..size[0] {
         let start_h = rand::thread_rng().gen_range(0..size[2] - sz + 1);
         let start_w = rand::thread_rng().gen_range(0..size[3] - sz + 1);

@@ -87,52 +87,73 @@ impl Tensor {
         sz
     }
 
+    /// Reads the tensor shape into a stack-allocated array, erroring out on
+    /// rank mismatch. This avoids the heap allocation that `size()` performs.
+    fn size_n<const N: usize>(&self) -> Result<[i64; N], TchError> {
+        const DIM_NAMES: [&str; 7] = [
+            "zero dims", "one dim", "two dims", "three dims", "four dims", "five dims", "six dims",
+        ];
+        let dim = unsafe_torch!(at_dim(self.c_tensor));
+        if dim != N {
+            return Err(TchError::Shape(format!(
+                "expected {}, got {:?}",
+                DIM_NAMES[N],
+                self.size()
+            )));
+        }
+        let mut sz = [0i64; N];
+        unsafe_torch!(at_shape(self.c_tensor, sz.as_mut_ptr()));
+        Ok(sz)
+    }
+
+    /// Returns the size of the tensor along a single dimension, avoiding the
+    /// heap allocation that `size()` performs.
+    pub(crate) fn size_at(&self, dim: usize) -> i64 {
+        let ndim = unsafe_torch!(at_dim(self.c_tensor));
+        assert!(dim < ndim, "size_at: dim {dim} out of range for a {ndim}-d tensor");
+        if ndim <= 8 {
+            let mut sz = [0i64; 8];
+            unsafe_torch!(at_shape(self.c_tensor, sz.as_mut_ptr()));
+            sz[dim]
+        } else {
+            self.size()[dim]
+        }
+    }
+
     /// Returns the tensor size for single dimension tensors.
     pub fn size1(&self) -> Result<i64, TchError> {
-        match self.size().as_slice() {
-            &[s0] => Ok(s0),
-            size => Err(TchError::Shape(format!("expected one dim, got {size:?}"))),
-        }
+        let [s0] = self.size_n::<1>()?;
+        Ok(s0)
     }
 
     /// Returns the tensor sizes for two dimension tensors.
     pub fn size2(&self) -> Result<(i64, i64), TchError> {
-        match self.size().as_slice() {
-            &[s0, s1] => Ok((s0, s1)),
-            size => Err(TchError::Shape(format!("expected two dims, got {size:?}"))),
-        }
+        let [s0, s1] = self.size_n::<2>()?;
+        Ok((s0, s1))
     }
 
     /// Returns the tensor sizes for three dimension tensors.
     pub fn size3(&self) -> Result<(i64, i64, i64), TchError> {
-        match self.size().as_slice() {
-            &[s0, s1, s2] => Ok((s0, s1, s2)),
-            size => Err(TchError::Shape(format!("expected three dims, got {size:?}"))),
-        }
+        let [s0, s1, s2] = self.size_n::<3>()?;
+        Ok((s0, s1, s2))
     }
 
     /// Returns the tensor sizes for four dimension tensors.
     pub fn size4(&self) -> Result<(i64, i64, i64, i64), TchError> {
-        match self.size().as_slice() {
-            &[s0, s1, s2, s3] => Ok((s0, s1, s2, s3)),
-            size => Err(TchError::Shape(format!("expected four dims, got {size:?}"))),
-        }
+        let [s0, s1, s2, s3] = self.size_n::<4>()?;
+        Ok((s0, s1, s2, s3))
     }
 
     /// Returns the tensor sizes for five dimension tensors.
     pub fn size5(&self) -> Result<(i64, i64, i64, i64, i64), TchError> {
-        match self.size().as_slice() {
-            &[s0, s1, s2, s3, s4] => Ok((s0, s1, s2, s3, s4)),
-            size => Err(TchError::Shape(format!("expected five dims, got {size:?}"))),
-        }
+        let [s0, s1, s2, s3, s4] = self.size_n::<5>()?;
+        Ok((s0, s1, s2, s3, s4))
     }
 
     /// Returns the tensor sizes for six dimension tensors.
     pub fn size6(&self) -> Result<(i64, i64, i64, i64, i64, i64), TchError> {
-        match self.size().as_slice() {
-            &[s0, s1, s2, s3, s4, s5] => Ok((s0, s1, s2, s3, s4, s5)),
-            size => Err(TchError::Shape(format!("expected six dims, got {size:?}"))),
-        }
+        let [s0, s1, s2, s3, s4, s5] = self.size_n::<6>()?;
+        Ok((s0, s1, s2, s3, s4, s5))
     }
 
     /// Returns the stride of the input tensor.
@@ -821,10 +842,10 @@ pub fn no_grad<T, F>(f: F) -> T
 where
     F: FnOnce() -> T,
 {
-    let prev = grad_set_enabled(false);
-    let result = f();
-    let _false = grad_set_enabled(prev);
-    result
+    // Restore through a guard so a panicking closure does not leave gradient
+    // tracking disabled for the rest of the thread.
+    let _guard = NoGradGuard { enabled: grad_set_enabled(false) };
+    f()
 }
 
 /// Runs a closure explicitly keeping track of gradients, this could be
@@ -833,10 +854,8 @@ pub fn with_grad<T, F>(f: F) -> T
 where
     F: FnOnce() -> T,
 {
-    let prev = grad_set_enabled(true);
-    let result = f();
-    let _false = grad_set_enabled(prev);
-    result
+    let _guard = NoGradGuard { enabled: grad_set_enabled(true) };
+    f()
 }
 
 /// A RAII guard that prevents gradient tracking until deallocated.

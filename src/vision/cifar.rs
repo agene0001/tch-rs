@@ -4,7 +4,7 @@
 //! <https://www.cs.toronto.edu/~kriz/cifar.html>
 //! The binary version of the dataset is used.
 use super::dataset::Dataset;
-use crate::{kind, IndexOp, Kind, Tensor};
+use crate::{Kind, Tensor};
 use std::fs::File;
 use std::io::{BufReader, Read, Result};
 
@@ -14,24 +14,25 @@ const C: i64 = 3;
 const BYTES_PER_IMAGE: i64 = W * H * C + 1;
 const SAMPLES_PER_FILE: i64 = 10000;
 
+// Decodes a CIFAR binary batch where each record is one label byte followed
+// by a C*H*W image. Slicing the whole batch at once replaces the previous
+// per-sample copy loop (~60k tensor ops per file) with a handful of ops.
+fn decode_samples(data: &[u8]) -> (Tensor, Tensor) {
+    let content = Tensor::from_slice(data).view((SAMPLES_PER_FILE, BYTES_PER_IMAGE));
+    let labels = content.select(1, 0).to_kind(Kind::Int64);
+    let images = content
+        .narrow(1, 1, BYTES_PER_IMAGE - 1)
+        .reshape([SAMPLES_PER_FILE, C, H, W])
+        .to_kind(Kind::Float)
+        / 255.0;
+    (images, labels)
+}
+
 fn read_file_(filename: &std::path::Path) -> Result<(Tensor, Tensor)> {
     let mut buf_reader = BufReader::new(File::open(filename)?);
     let mut data = vec![0u8; (SAMPLES_PER_FILE * BYTES_PER_IMAGE) as usize];
     buf_reader.read_exact(&mut data)?;
-    let content = Tensor::from_slice(&data);
-    let images = Tensor::zeros([SAMPLES_PER_FILE, C, H, W], kind::FLOAT_CPU);
-    let labels = Tensor::zeros([SAMPLES_PER_FILE], kind::INT64_CPU);
-    for index in 0..SAMPLES_PER_FILE {
-        let content_offset = BYTES_PER_IMAGE * index;
-        labels.i(index).copy_(&content.i(content_offset));
-        images.i(index).copy_(
-            &content
-                .narrow(0, 1 + content_offset, BYTES_PER_IMAGE - 1)
-                .view((C, H, W))
-                .to_kind(Kind::Float),
-        );
-    }
-    Ok((images.to_kind(Kind::Float) / 255.0, labels))
+    Ok(decode_samples(&data))
 }
 
 fn read_file(filename: &std::path::Path) -> Result<(Tensor, Tensor)> {
@@ -61,4 +62,41 @@ pub fn load_dir<T: AsRef<std::path::Path>>(dir: T) -> Result<Dataset> {
         test_labels,
         labels: 10,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::IndexOp;
+
+    #[test]
+    fn decode_matches_binary_layout() {
+        // Build a synthetic batch where every byte is a known function of its
+        // record offset: label = n % 10, pixel byte = (n + pixel_index) % 256.
+        let mut data = vec![0u8; (SAMPLES_PER_FILE * BYTES_PER_IMAGE) as usize];
+        for n in 0..SAMPLES_PER_FILE {
+            let base = (n * BYTES_PER_IMAGE) as usize;
+            data[base] = (n % 10) as u8;
+            for p in 0..(BYTES_PER_IMAGE - 1) as usize {
+                data[base + 1 + p] = ((n as usize + p) % 256) as u8;
+            }
+        }
+        let (images, labels) = decode_samples(&data);
+        assert_eq!(images.size(), [SAMPLES_PER_FILE, C, H, W]);
+        assert_eq!(labels.size(), [SAMPLES_PER_FILE]);
+        assert_eq!(labels.kind(), Kind::Int64);
+        assert_eq!(images.kind(), Kind::Float);
+
+        for &n in &[0i64, 1, 4999, SAMPLES_PER_FILE - 1] {
+            assert_eq!(i64::try_from(labels.get(n)).unwrap(), n % 10);
+            // The binary format stores channel-major planes: pixel index for
+            // (c, h, w) is c*H*W + h*W + w.
+            for &(c, h, w) in &[(0i64, 0i64, 0i64), (1, 2, 3), (2, 31, 31)] {
+                let p = (c * H * W + h * W + w) as usize;
+                let expected = ((n as usize + p) % 256) as f64 / 255.0;
+                let got = f64::try_from(images.i((n, c, h, w))).unwrap();
+                assert!((got - expected).abs() < 1e-6, "sample {n} pixel {p}: {got} vs {expected}");
+            }
+        }
+    }
 }

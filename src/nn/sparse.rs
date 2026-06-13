@@ -1,5 +1,5 @@
 //! Sparse Layers
-use crate::Tensor;
+use crate::{IndexOp, Tensor};
 use std::borrow::Borrow;
 
 /// Configuration option for an embedding layer.
@@ -39,7 +39,17 @@ pub fn embedding<'a, T: Borrow<super::Path<'a>>>(
     config: EmbeddingConfig,
 ) -> Embedding {
     let vs = vs.borrow();
-    Embedding { ws: vs.var("weight", &[num_embeddings, embedding_dim], config.ws_init), config }
+    let ws = vs.var("weight", &[num_embeddings, embedding_dim], config.ws_init);
+    // PyTorch zeroes the padding_idx row after init (and the embedding op
+    // keeps its gradient at zero), so padding tokens embed to an exact zero
+    // vector instead of a frozen random one. A padding_idx of -1 means no
+    // padding handling, matching the ATen convention used by the op below.
+    if config.padding_idx >= 0 && config.padding_idx < num_embeddings {
+        crate::no_grad(|| {
+            let _ = ws.i(config.padding_idx).fill_(0.);
+        });
+    }
+    Embedding { ws, config }
 }
 
 impl super::module::Module for Embedding {

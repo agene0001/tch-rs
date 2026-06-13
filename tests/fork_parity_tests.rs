@@ -5,9 +5,15 @@
 //! - lazy `Iter2::shuffle`,
 //! - fused `cross_entropy_for_logits`,
 //! - `Tensor::copy` without the redundant zero-fill,
-//! - mutex-free imagenet normalization.
+//! - mutex-free imagenet normalization,
+//! - `Entry::or_kaiming_uniform` actually sampling a uniform distribution,
+//! - `Entry::or_{zeros,ones}_no_train` not registering trainable variables,
+//! - `Init::Orthogonal` preserving the requested shape for rank > 2,
+//! - embedding `padding_idx` rows zeroed at init,
+//! - vectorized `random_flip` / inclusive-offset `random_crop`,
+//! - bulk reads in `Tensor::iter` and stack-allocated `sizeN()`.
 use std::convert::TryFrom;
-use tch::nn::{self, OptimizerConfig, RNN};
+use tch::nn::{self, Module, OptimizerConfig, RNN};
 use tch::{data::Iter2, Device, Kind, Tensor};
 
 #[test]
@@ -259,6 +265,401 @@ fn imagenet_normalize_roundtrip() {
         let diff = (i16::from(*orig) - i16::from(*back)).abs();
         assert!(diff <= 1, "roundtrip {orig} -> {back}");
     }
+}
+
+#[test]
+fn or_kaiming_uniform_is_uniform() {
+    let vs = nn::VarStore::new(Device::Cpu);
+    let w = vs.root().entry("w").or_kaiming_uniform(&[256, 128]);
+    assert_eq!(w.size(), [256, 128]);
+    // Kaiming uniform with a=sqrt(5) over fan_in=128 is U(-b, b) with
+    // b = 1/sqrt(128). The kaiming *normal* distribution this used to sample
+    // has std = sqrt(2/128) and would exceed the bound almost surely over
+    // 32768 samples.
+    let bound = 1.0 / 128f64.sqrt();
+    let max = f64::try_from(w.abs().max()).unwrap();
+    assert!(max <= bound * (1.0 + 1e-5), "max {max} exceeds uniform bound {bound}");
+    assert!(max > 0.0);
+}
+
+#[test]
+fn no_train_entries_are_not_trainable() {
+    let vs = nn::VarStore::new(Device::Cpu);
+    let root = vs.root();
+    let z = root.entry("z").or_zeros_no_train(&[4]);
+    let o = root.entry("o").or_ones_no_train(&[4]);
+    assert!(!z.requires_grad(), "or_zeros_no_train must not require grad");
+    assert!(!o.requires_grad(), "or_ones_no_train must not require grad");
+    assert!(vs.trainable_variables().is_empty());
+    // The values themselves are still as requested.
+    assert_eq!(Vec::<f32>::try_from(&z).unwrap(), vec![0.0; 4]);
+    assert_eq!(Vec::<f32>::try_from(&o).unwrap(), vec![1.0; 4]);
+}
+
+#[test]
+fn orthogonal_init_keeps_shape_and_orthogonality() {
+    let vs = nn::VarStore::new(Device::Cpu);
+
+    // Conv-style rank-4 weight: the variable must keep its 4d shape (it used
+    // to come back flattened to [16, 36]).
+    let w = vs.root().orthogonal("w", &[16, 4, 3, 3], 1.0);
+    assert_eq!(w.size(), [16, 4, 3, 3]);
+    // rows(16) <= cols(36): the flattened rows are orthonormal.
+    let flat = w.view([16, 36]);
+    let prod = flat.matmul(&flat.tr());
+    let eye = Tensor::eye(16, (Kind::Float, Device::Cpu));
+    assert!(prod.allclose(&eye, 1e-4, 1e-5, false), "rows are not orthonormal");
+
+    // Tall matrix: columns are orthonormal, and the gain scales them.
+    let t = vs.root().orthogonal("t", &[8, 4], 2.0);
+    assert_eq!(t.size(), [8, 4]);
+    let prod = t.tr().matmul(&t);
+    let expected = Tensor::eye(4, (Kind::Float, Device::Cpu)) * 4.0;
+    assert!(prod.allclose(&expected, 1e-4, 1e-5, false), "gain^2 * I expected");
+
+    // Re-initializing an existing (grad-tracked) variable in place.
+    let mut v = vs.root().var("v", &[8, 4], nn::Init::Const(0.0));
+    v.init(nn::Init::Orthogonal { gain: 1.0 });
+    assert_eq!(v.size(), [8, 4]);
+    let prod = v.tr().matmul(&v);
+    let eye = Tensor::eye(4, (Kind::Float, Device::Cpu));
+    assert!(prod.allclose(&eye, 1e-4, 1e-5, false), "in-place orthogonal re-init");
+}
+
+#[test]
+fn embedding_padding_row_is_zero() {
+    let vs = nn::VarStore::new(Device::Cpu);
+    let config = nn::EmbeddingConfig { padding_idx: 2, ..Default::default() };
+    let emb = nn::embedding(vs.root(), 5, 8, config);
+
+    // PyTorch zeroes weight[padding_idx] after init.
+    assert_eq!(f64::try_from(emb.ws.get(2).abs().sum(Kind::Float)).unwrap(), 0.0);
+    // The other rows keep their N(0, 1) init.
+    assert!(f64::try_from(emb.ws.abs().sum(Kind::Float)).unwrap() > 0.0);
+
+    // Padding tokens embed to exact zero vectors.
+    let out = emb.forward(&Tensor::from_slice(&[2i64, 0]));
+    assert_eq!(f64::try_from(out.get(0).abs().sum(Kind::Float)).unwrap(), 0.0);
+    assert!(f64::try_from(out.get(1).abs().sum(Kind::Float)).unwrap() > 0.0);
+
+    // The default config (padding_idx = -1) means no padding handling: no row
+    // is zeroed, in particular not the last one.
+    let emb = nn::embedding(vs.root(), 5, 8, Default::default());
+    assert!(f64::try_from(emb.ws.get(4).abs().sum(Kind::Float)).unwrap() > 0.0);
+}
+
+#[test]
+fn rnn_batch_first_false_layouts_agree() {
+    let cfg_sf = nn::RNNConfig { batch_first: false, ..Default::default() };
+
+    // Copy the weights across rather than re-seeding the global RNG: tests
+    // run in parallel threads, so two seed+init sequences are not guaranteed
+    // to consume the same random draws.
+    let vs1 = nn::VarStore::new(Device::Cpu);
+    let lstm_bf = nn::lstm(vs1.root(), 4, 6, Default::default());
+    let mut vs2 = nn::VarStore::new(Device::Cpu);
+    let lstm_sf = nn::lstm(vs2.root(), 4, 6, cfg_sf);
+    vs2.copy(&vs1).unwrap();
+
+    let input = Tensor::randn([3, 5, 4], (Kind::Float, Device::Cpu)); // [batch, seq, feat]
+    let (out_bf, nn::LSTMState((h_bf, c_bf))) = lstm_bf.seq(&input);
+    // seq() used to size the zero state from dim 0 even when the layout is
+    // [seq, batch, features], which made this error out (or silently mix the
+    // axes for square inputs).
+    let (out_sf, nn::LSTMState((h_sf, c_sf))) = lstm_sf.seq(&input.transpose(0, 1).contiguous());
+    assert_eq!(out_sf.size(), [5, 3, 6]);
+    assert!(out_bf.transpose(0, 1).allclose(&out_sf, 1e-5, 1e-7, false));
+    assert!(h_bf.allclose(&h_sf, 1e-5, 1e-7, false));
+    assert!(c_bf.allclose(&c_sf, 1e-5, 1e-7, false));
+
+    // step() must insert the singleton sequence axis, keeping the batch on
+    // the layout's batch axis.
+    let step_in = Tensor::randn([3, 4], (Kind::Float, Device::Cpu));
+    let nn::LSTMState((h, c)) = lstm_sf.step(&step_in, &lstm_sf.zero_state(3));
+    assert_eq!(h.size(), [1, 3, 6]);
+    assert_eq!(c.size(), [1, 3, 6]);
+
+    // Same checks for the GRU layer.
+    let vs3 = nn::VarStore::new(Device::Cpu);
+    let gru_bf = nn::gru(vs3.root(), 4, 6, Default::default());
+    let mut vs4 = nn::VarStore::new(Device::Cpu);
+    let gru_sf = nn::gru(vs4.root(), 4, 6, cfg_sf);
+    vs4.copy(&vs3).unwrap();
+    let (gout_bf, nn::GRUState(gh_bf)) = gru_bf.seq(&input);
+    let (gout_sf, nn::GRUState(gh_sf)) = gru_sf.seq(&input.transpose(0, 1).contiguous());
+    assert!(gout_bf.transpose(0, 1).allclose(&gout_sf, 1e-5, 1e-7, false));
+    assert!(gh_bf.allclose(&gh_sf, 1e-5, 1e-7, false));
+    let nn::GRUState(gh) = gru_sf.step(&step_in, &gru_sf.zero_state(3));
+    assert_eq!(gh.size(), [1, 3, 6]);
+}
+
+#[test]
+fn random_flip_is_seeded_and_per_sample() {
+    let t = Tensor::arange(4 * 3 * 5 * 5, (Kind::Float, Device::Cpu)).view([4, 3, 5, 5]);
+
+    // Each output sample must be either the original or its horizontal flip.
+    let out = tch::vision::dataset::random_flip(&t);
+    assert_eq!(out.size(), [4, 3, 5, 5]);
+    for i in 0..4 {
+        let sample = out.get(i);
+        let orig = t.get(i);
+        let flipped = orig.flip([2]);
+        assert!(sample == orig || sample == flipped, "sample {i} is neither");
+    }
+
+    // The flip mask now comes from the torch RNG, so it is reproducible
+    // under manual_seed. Tests in this binary run in parallel and share the
+    // global RNG, so allow a few attempts in case another test draws random
+    // values between the two seedings.
+    let deterministic = (0..3).any(|_| {
+        tch::manual_seed(7);
+        let a = tch::vision::dataset::random_flip(&t);
+        tch::manual_seed(7);
+        let b = tch::vision::dataset::random_flip(&t);
+        a == b
+    });
+    assert!(deterministic, "same seed must give the same flips");
+
+    // Over many samples both outcomes occur.
+    let big = Tensor::arange(64 * 4, (Kind::Float, Device::Cpu)).view([64, 1, 2, 2]);
+    let out = tch::vision::dataset::random_flip(&big);
+    let flipped_count = i64::try_from(
+        out.eq_tensor(&big.flip([3])).all_dims([1, 2, 3].as_slice(), false).sum(Kind::Int64),
+    )
+    .unwrap();
+    assert!(flipped_count > 0 && flipped_count < 64, "got {flipped_count} flips out of 64");
+}
+
+#[test]
+fn random_crop_samples_all_offsets() {
+    // 3x3 image with distinct values, pad=1: the padded image is 5x5 and the
+    // 9 crop offsets (0..=2)^2 each produce a distinct window. The previous
+    // exclusive bound could only ever produce 4 of them.
+    let t = Tensor::arange(9, (Kind::Float, Device::Cpu)).view([1, 1, 3, 3]);
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..300 {
+        let crop = tch::vision::dataset::random_crop(&t, 1);
+        assert_eq!(crop.size(), [1, 1, 3, 3]);
+        let values: Vec<i64> =
+            Vec::<f32>::try_from(crop.view(-1)).unwrap().iter().map(|&v| v as i64).collect();
+        seen.insert(values);
+    }
+    assert_eq!(seen.len(), 9, "all 9 crop offsets should be reachable");
+}
+
+#[test]
+fn random_crop_pad_zero_is_identity() {
+    // pad=0 used to panic on an empty sampling range.
+    let t = Tensor::arange(2 * 3 * 4 * 4, (Kind::Float, Device::Cpu)).view([2, 3, 4, 4]);
+    let out = tch::vision::dataset::random_crop(&t, 0);
+    assert!(out == t);
+}
+
+#[test]
+fn random_cutout_zeroes_one_square() {
+    let t = Tensor::ones([2, 3, 8, 8], (Kind::Float, Device::Cpu));
+    let out = tch::vision::dataset::random_cutout(&t, 3);
+    assert_eq!(out.size(), [2, 3, 8, 8]);
+    // Exactly one 3x3 square is zeroed across all channels of each sample.
+    let expected_sum = (2 * 3 * 8 * 8 - 2 * 3 * 9) as f64;
+    assert_eq!(f64::try_from(out.sum(Kind::Float)).unwrap(), expected_sum);
+    // The input is untouched.
+    assert_eq!(f64::try_from(t.sum(Kind::Float)).unwrap(), (2 * 3 * 8 * 8) as f64);
+}
+
+#[test]
+fn tensor_iter_bulk_read_matches() {
+    let t = Tensor::from_slice(&[1.5f32, -2.5, 3.0]);
+    // Reads through a kind conversion, matching the old per-element casts.
+    let v: Vec<f64> = t.iter::<f64>().unwrap().collect();
+    assert_eq!(v, vec![1.5, -2.5, 3.0]);
+    let it = t.iter::<i64>().unwrap();
+    assert_eq!(it.len(), 3);
+    assert_eq!(it.collect::<Vec<_>>(), vec![1, -2, 3]);
+    // Multi-dimensional tensors still error out.
+    assert!(t.view([3, 1]).iter::<i64>().is_err());
+}
+
+#[test]
+fn size_n_accessors() {
+    let t = Tensor::from_slice(&[1f32, 2.0, 3.0, 4.0]).view([2, 2]);
+    assert_eq!(t.size2().unwrap(), (2, 2));
+    assert!(t.size1().is_err());
+    let err = t.size3().unwrap_err().to_string();
+    assert!(err.contains("three dims") && err.contains("[2, 2]"), "unexpected message: {err}");
+}
+
+#[test]
+fn no_grad_restores_after_panic() {
+    let result = std::panic::catch_unwind(|| tch::no_grad(|| panic!("boom")));
+    assert!(result.is_err());
+    // Gradient tracking must be re-enabled once the panic has been caught
+    // (grad mode is thread local, so parallel tests do not interfere).
+    let t = Tensor::from_slice(&[1f32]).set_requires_grad(true);
+    let y = &t * &t;
+    assert!(y.requires_grad(), "grad mode must be restored after a panic in no_grad");
+}
+
+#[test]
+fn from_slice2_matches_rows() {
+    let t = Tensor::from_slice2(&[[1i64, 2, 3], [4, 5, 6]]);
+    assert_eq!(t.size(), [2, 3]);
+    assert_eq!(Vec::<i64>::try_from(t.view(-1)).unwrap(), vec![1, 2, 3, 4, 5, 6]);
+    let ragged = std::panic::catch_unwind(|| Tensor::from_slice2(&[vec![1f32, 2.0], vec![3.0]]));
+    assert!(ragged.is_err(), "ragged rows must panic");
+}
+
+#[test]
+fn var_store_read_safetensors_trainable() {
+    // read_safetensors/fill_safetensors used to fail on trainable variables:
+    // the copy was not wrapped in no_grad, which autograd rejects for
+    // requires-grad leaves.
+    let dir = std::env::temp_dir().join(format!("tch_st_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("vars.safetensors");
+
+    let src = nn::VarStore::new(Device::Cpu);
+    let _w = src.root().var("w", &[4, 3], nn::Init::Uniform { lo: -1.0, up: 1.0 });
+    src.save(&path).unwrap();
+
+    let dst = nn::VarStore::new(Device::Cpu);
+    let w2 = dst.root().var("w", &[4, 3], nn::Init::Const(0.0));
+    dst.read_safetensors(&path).unwrap();
+    assert!(w2.requires_grad());
+    assert!(f64::try_from(w2.abs().sum(Kind::Float)).unwrap() > 0.0);
+
+    let dst2 = nn::VarStore::new(Device::Cpu);
+    let w3 = dst2.root().var("w", &[4, 3], nn::Init::Const(0.0));
+    dst2.fill_safetensors(&path).unwrap();
+    assert!(f64::try_from(w3.abs().sum(Kind::Float)).unwrap() > 0.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn from_data_size_roundtrip() {
+    // from_slice/from_data_size now go through torch::empty + memcpy; every
+    // element must still arrive intact.
+    let bytes: Vec<u8> = (0..24).collect();
+    let t = Tensor::from_data_size(&bytes, &[2, 3, 4], Kind::Uint8);
+    assert_eq!(t.size(), [2, 3, 4]);
+    assert_eq!(Vec::<u8>::try_from(t.view(-1)).unwrap(), bytes);
+
+    let floats: Vec<f32> = (0..1000).map(|i| i as f32 * 0.5 - 250.0).collect();
+    let t = Tensor::from_slice(&floats);
+    assert_eq!(Vec::<f32>::try_from(&t).unwrap(), floats);
+}
+
+/// Print-only timing comparisons for this round of optimizations; run with
+/// `cargo test -- --ignored --nocapture`. The `from_slice` number measures the
+/// `torch::empty` change in torch_api.cpp: rebuild with the previous
+/// `torch::zeros` version to compare baselines.
+#[test]
+#[ignore]
+fn bench_fork_optimizations() {
+    use std::hint::black_box;
+    use std::time::Instant;
+    use tch::IndexOp;
+
+    // Tensor creation from host data (64MB of f32 per call).
+    let data: Vec<f32> = vec![1.0; 16 * 1024 * 1024];
+    let start = Instant::now();
+    for _ in 0..20 {
+        let _ = black_box(Tensor::from_slice(&data));
+    }
+    println!("from_slice 64MB x20:           {:?}", start.elapsed());
+
+    // Vectorized random_flip vs the previous per-sample loop, same workload.
+    let imgs = Tensor::randn([128, 3, 224, 224], (Kind::Float, Device::Cpu));
+    let start = Instant::now();
+    for _ in 0..5 {
+        let _ = black_box(tch::vision::dataset::random_flip(&imgs));
+    }
+    println!("random_flip vectorized x5:     {:?}", start.elapsed());
+
+    let start = Instant::now();
+    for _ in 0..5 {
+        let size = imgs.size();
+        let output = imgs.zeros_like();
+        for i in 0..size[0] {
+            let mut output_view = output.i(i);
+            let view = imgs.i(i);
+            let src = if rand::random() { view } else { view.flip([2]) };
+            output_view.copy_(&src);
+        }
+        black_box(&output);
+    }
+    println!("random_flip per-sample x5:     {:?}", start.elapsed());
+
+    // Scalar-op overhead: each `tensor op scalar` creates and frees a
+    // heap-allocated torch::Scalar through the FFI.
+    let t = Tensor::from_slice(&[1.0f32]);
+    let start = Instant::now();
+    for _ in 0..200_000 {
+        let _ = black_box(&t + 1.0);
+    }
+    println!("scalar add x200k:              {:?}", start.elapsed());
+
+    // Text-style batching: gather every window in one unfold+index_select vs
+    // one narrow per sample plus a stack.
+    let data = Tensor::arange(1_000_000, (Kind::Int64, Device::Cpu));
+    let (seq_len, batch_size, nbatches) = (256i64, 64i64, 50i64);
+    let indexes = Tensor::randperm(1_000_000 - seq_len + 1, (Kind::Int64, Device::Cpu));
+    let start = Instant::now();
+    for b in 0..nbatches {
+        let batch_indexes = indexes.i(b * batch_size..(b + 1) * batch_size);
+        let _ = black_box(data.unfold(0, seq_len, 1).index_select(0, &batch_indexes));
+    }
+    println!("text batches unfold x50:       {:?}", start.elapsed());
+    let start = Instant::now();
+    for b in 0..nbatches {
+        let batch_indexes =
+            Vec::<i64>::try_from(indexes.i(b * batch_size..(b + 1) * batch_size)).unwrap();
+        let batch: Vec<_> = batch_indexes.iter().map(|&i| data.i(i..i + seq_len)).collect();
+        let batch: Vec<_> = batch.iter().collect();
+        let _ = black_box(Tensor::stack(&batch, 0));
+    }
+    println!("text batches narrow+stack x50: {:?}", start.elapsed());
+
+    // CIFAR-style batch decoding: vectorized slicing vs the previous
+    // per-sample copy loop (10k records of 1 label byte + 3072 image bytes).
+    let data: Vec<u8> = (0..10_000usize * 3073).map(|i| (i % 256) as u8).collect();
+    let start = Instant::now();
+    let content = Tensor::from_slice(&data).view([10_000, 3073]);
+    let labels = content.select(1, 0).to_kind(Kind::Int64);
+    let images =
+        content.narrow(1, 1, 3072).reshape([10_000, 3, 32, 32]).to_kind(Kind::Float) / 255.0;
+    black_box((&images, &labels));
+    println!("cifar decode vectorized:       {:?}", start.elapsed());
+
+    let start = Instant::now();
+    let content = Tensor::from_slice(&data);
+    let images = Tensor::zeros([10_000, 3, 32, 32], (Kind::Float, Device::Cpu));
+    let labels = Tensor::zeros([10_000], (Kind::Int64, Device::Cpu));
+    for index in 0..10_000i64 {
+        let offset = 3073 * index;
+        let mut label_view = labels.i(index);
+        label_view.copy_(&content.i(offset));
+        let mut image_view = images.i(index);
+        image_view
+            .copy_(&content.narrow(0, 1 + offset, 3072).view((3i64, 32, 32)).to_kind(Kind::Float));
+    }
+    let images = images.to_kind(Kind::Float) / 255.0;
+    black_box((&images, &labels));
+    println!("cifar decode per-sample loop:  {:?}", start.elapsed());
+
+    // Bulk Iter reads vs one FFI value extraction per element (the old
+    // implementation; on CUDA each of those is also a device sync).
+    let t = Tensor::arange(1_000_000, (Kind::Int64, Device::Cpu));
+    let start = Instant::now();
+    let bulk: i64 = t.iter::<i64>().unwrap().sum();
+    println!("iter bulk 1M elements:         {:?}", start.elapsed());
+    let start = Instant::now();
+    let mut per_elem = 0i64;
+    for i in 0..1_000_000 {
+        per_elem += t.int64_value(&[i]);
+    }
+    println!("per-element reads 1M elements: {:?}", start.elapsed());
+    assert_eq!(bulk, per_elem);
 }
 
 /// Print-only timing comparisons; run with `cargo test -- --ignored --nocapture`.

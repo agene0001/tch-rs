@@ -340,11 +340,11 @@ impl Tensor {
                     if let Some((start, length)) = match (start, end) {
                         (Unbounded, Unbounded) => None,
                         (Included(start), Unbounded) => {
-                            let dim_len = curr_tensor.size()[curr_idx as usize];
+                            let dim_len = curr_tensor.size_at(curr_idx as usize);
                             Some((*start, dim_len - *start))
                         }
                         (Excluded(start), Unbounded) => {
-                            let dim_len = curr_tensor.size()[curr_idx as usize];
+                            let dim_len = curr_tensor.size_at(curr_idx as usize);
                             Some((*start + 1, dim_len - *start - 1))
                         }
                         (Unbounded, Included(end)) => Some((0, *end + 1)),

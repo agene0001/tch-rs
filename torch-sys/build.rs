@@ -394,6 +394,10 @@ impl SystemInfo {
                     .cpp(true)
                     .pic(true)
                     .warnings(false)
+                    // The wrapper sits on every FFI call: keep it optimized
+                    // even under debug cargo profiles (it is stable glue that
+                    // is rarely stepped through with a debugger).
+                    .opt_level(2)
                     .includes(&self.libtorch_include_dirs)
                     .flag(format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
                     .flag("-std=c++17")
@@ -410,6 +414,9 @@ impl SystemInfo {
                     .cpp(true)
                     .pic(true)
                     .warnings(false)
+                    // See the comment on the Linux/macOS builder: keep the
+                    // FFI glue optimized even under debug cargo profiles.
+                    .opt_level(2)
                     .includes(&self.libtorch_include_dirs)
                     .flag("/std:c++17")
                     .flag("/p:DefineConstants=GLOG_USE_GLOG_EXPORT")

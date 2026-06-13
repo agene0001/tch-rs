@@ -165,7 +165,10 @@ pub fn f_init(i: Init, dims: &[i64], device: Device, kind: Kind) -> Result<Tenso
             let mut q = if rows < cols { q.f_t_()? } else { q };
             crate::no_grad(|| q *= gain);
 
-            q.f_contiguous()
+            // The QR factorization happens on the [rows, cols] flattening;
+            // restore the requested shape so e.g. conv weights keep their
+            // 4d layout (PyTorch's orthogonal_ does tensor.view_as(q).copy_).
+            q.f_contiguous()?.f_reshape(dims)
         }
     }
 }

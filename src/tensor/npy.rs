@@ -121,7 +121,9 @@ impl Header {
                     return Err(TchError::FileFormat("empty descr".to_string()));
                 }
                 if descr.starts_with('>') {
-                    return Err(TchError::FileFormat(format!("little-endian descr {descr}")));
+                    return Err(TchError::FileFormat(format!(
+                        "big-endian descr {descr} is not supported"
+                    )));
                 }
                 // the only supported types in tensor are:
                 //     float64, float32, float16,

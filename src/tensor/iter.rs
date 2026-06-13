@@ -1,47 +1,38 @@
 use super::Tensor;
-use crate::TchError;
+use crate::{kind::Element, TchError};
 
+/// An iterator over the elements of a one dimensional tensor.
+///
+/// The tensor values are read in bulk when the iterator is created: reading
+/// element by element through the C api would perform one tensor to scalar
+/// conversion per element, and on CUDA a device synchronization per element.
 pub struct Iter<T> {
-    index: i64,
-    len: i64,
-    content: Tensor,
-    phantom: std::marker::PhantomData<T>,
+    index: usize,
+    content: Vec<T>,
 }
 
 impl Tensor {
-    pub fn iter<T>(&self) -> Result<Iter<T>, TchError> {
-        Ok(Iter {
-            index: 0,
-            len: self.size1()?,
-            content: self.shallow_clone(),
-            phantom: std::marker::PhantomData,
-        })
+    pub fn iter<T: Element + Copy>(&self) -> Result<Iter<T>, TchError> {
+        Ok(Iter { index: 0, content: Vec::<T>::try_from(self)? })
     }
 }
 
-impl std::iter::Iterator for Iter<i64> {
-    type Item = i64;
+impl<T: Copy> std::iter::Iterator for Iter<T> {
+    type Item = T;
+
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.len {
-            return None;
-        }
-        let v = self.content.int64_value(&[self.index]);
+        let v = *self.content.get(self.index)?;
         self.index += 1;
         Some(v)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.content.len() - self.index;
+        (remaining, Some(remaining))
     }
 }
 
-impl std::iter::Iterator for Iter<f64> {
-    type Item = f64;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.len {
-            return None;
-        }
-        let v = self.content.double_value(&[self.index]);
-        self.index += 1;
-        Some(v)
-    }
-}
+impl<T: Copy> std::iter::ExactSizeIterator for Iter<T> {}
 
 impl std::iter::Sum for Tensor {
     fn sum<I: Iterator<Item = Tensor>>(mut iter: I) -> Tensor {

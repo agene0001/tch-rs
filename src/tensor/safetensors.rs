@@ -140,7 +140,9 @@ impl VarStore {
         for (name, tensor) in self.variables_.lock().unwrap().named_variables.iter_mut() {
             let view = safetensors.tensor(name).map_err(|e| wrap_err(&path, e))?;
             let data: Tensor = view.try_into()?;
-            tensor.f_copy_(&data)?
+            // Without no_grad, copying into a trainable (requires-grad leaf)
+            // variable is rejected by autograd.
+            crate::no_grad(|| tensor.f_copy_(&data))?
         }
         Ok(())
     }
@@ -148,7 +150,7 @@ impl VarStore {
     pub fn fill_safetensors<P: AsRef<Path>>(&self, path: P) -> Result<(), TchError> {
         for (name, tensor) in Tensor::read_safetensors(path)? {
             if let Some(s) = self.variables_.lock().unwrap().named_variables.get_mut(&name) {
-                s.f_copy_(&tensor)?
+                crate::no_grad(|| s.f_copy_(&tensor))?
             }
         }
         Ok(())
