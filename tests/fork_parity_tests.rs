@@ -692,6 +692,41 @@ fn bench_shuffle_and_clip() {
     }
     println!("materialized shuffle epoch ({batches} batches): {:?}", start.elapsed());
 
+    // Same comparison with real per-batch work: one epoch of training an MLP.
+    // The lazy shuffle costs a fixed per-batch gather, so its relative
+    // overhead shrinks as per-batch compute grows (vary `hidden` to see it).
+    let train_epoch = |xs: &Tensor, ys: &Tensor, hidden: i64, lazy: bool| {
+        let vs = nn::VarStore::new(Device::Cpu);
+        let root = vs.root();
+        let net = nn::seq()
+            .add(nn::linear(&root / "l1", 64, hidden, Default::default()))
+            .add_fn(Tensor::relu)
+            .add(nn::linear(&root / "l2", hidden, 1, Default::default()));
+        let mut opt = nn::Sgd::default().build(&vs, 1e-3).unwrap();
+        let start = Instant::now();
+        let (xs_mat, ys_mat);
+        let mut iter = if lazy {
+            let mut it = Iter2::new(xs, ys, 256);
+            it.shuffle();
+            it
+        } else {
+            let index = Tensor::randperm(xs.size()[0], (Kind::Int64, Device::Cpu));
+            xs_mat = xs.index_select(0, &index);
+            ys_mat = ys.index_select(0, &index);
+            Iter2::new(&xs_mat, &ys_mat, 256)
+        };
+        for (bx, by) in &mut iter {
+            let loss = net.forward(&bx).mse_loss(&by, tch::Reduction::Mean);
+            opt.backward_step(&loss);
+        }
+        start.elapsed()
+    };
+    for hidden in [128, 1024] {
+        let lazy = train_epoch(&xs, &ys, hidden, true);
+        let mat = train_epoch(&xs, &ys, hidden, false);
+        println!("training epoch (hidden={hidden}), lazy shuffle: {lazy:?}, materialized: {mat:?}");
+    }
+
     // clip_grad_norm throughput (the win is removing the device sync, which
     // shows up on CUDA rather than CPU; this is a smoke test).
     let vs = nn::VarStore::new(Device::Cpu);
