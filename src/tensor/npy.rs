@@ -235,8 +235,11 @@ impl crate::Tensor {
         path: P,
     ) -> Result<(), TchError> {
         let mut zip = zip::ZipWriter::new(File::create(path.as_ref())?);
-        let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        // zip 8.x made FileOptions generic over the extra-field extension type,
+        // so `FileOptions::default()` no longer infers; SimpleFileOptions is the
+        // `FileOptions<'static, ()>` alias for the common no-extension case.
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
 
         for (name, tensor) in ts.iter() {
             zip.start_file(format!("{}.npy", name.as_ref()), options)?;
