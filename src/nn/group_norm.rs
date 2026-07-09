@@ -42,6 +42,13 @@ pub fn group_norm<'a, T: Borrow<super::Path<'a>>>(
     config: GroupNormConfig,
 ) -> GroupNorm {
     let vs = vs.borrow();
+    // PyTorch's nn.GroupNorm validates this at construction time; failing
+    // early here beats an opaque aten error at the first forward call.
+    assert!(num_groups > 0, "group_norm: num_groups ({num_groups}) must be positive");
+    assert!(
+        num_channels % num_groups == 0,
+        "group_norm: num_channels ({num_channels}) must be divisible by num_groups ({num_groups})"
+    );
     let (ws, bs) = if config.affine {
         let ws = vs.var("weight", &[num_channels], config.ws_init);
         let bs = vs.var("bias", &[num_channels], config.bs_init);

@@ -478,7 +478,9 @@ tensor at_load_image(char *filename) {
       int w = -1; int h = -1; int c = -1;
       void *data = stbi_load(filename, &w, &h, &c, 3);
       if (data == nullptr) throw std::invalid_argument(stbi_failure_reason());
-      torch::Tensor tensor = torch::zeros({h, w, 3}, at::ScalarType::Byte);
+      // empty: the memcpy below overwrites every byte, so zero-filling first
+      // would be redundant work.
+      torch::Tensor tensor = torch::empty({h, w, 3}, at::ScalarType::Byte);
       memcpy(tensor.data_ptr(), data, h * w * 3); free(data);
       return new torch::Tensor(tensor);)
   return nullptr;
@@ -489,7 +491,9 @@ tensor at_load_image_from_memory(unsigned char *img_data, size_t img_size) {
       int w = -1; int h = -1; int c = -1;
       void *data = stbi_load_from_memory(img_data, img_size, &w, &h, &c, 3);
       if (data == nullptr) throw std::invalid_argument(stbi_failure_reason());
-      torch::Tensor tensor = torch::zeros({h, w, 3}, at::ScalarType::Byte);
+      // empty: the memcpy below overwrites every byte, so zero-filling first
+      // would be redundant work.
+      torch::Tensor tensor = torch::empty({h, w, 3}, at::ScalarType::Byte);
       memcpy(tensor.data_ptr(), data, h * w * 3); free(data);
       return new torch::Tensor(tensor);)
   return nullptr;
@@ -571,7 +575,9 @@ tensor at_resize_image(tensor tensor, int out_w, int out_h) {
       int h = sizes[0]; int w = sizes[1]; int c = sizes[2];
       auto tmp_tensor = tensor->contiguous();
       const unsigned char *tensor_data = (unsigned char *)tmp_tensor.data_ptr();
-      torch::Tensor out = torch::zeros({out_h, out_w, c}, at::ScalarType::Byte);
+      // empty: stbir_resize_uint8 writes every output byte, so zero-filling
+      // first would be redundant work.
+      torch::Tensor out = torch::empty({out_h, out_w, c}, at::ScalarType::Byte);
       stbir_resize_uint8(tensor_data, w, h, 0, (unsigned char *)out.data_ptr(),
                          out_w, out_h, 0, c);
       return new torch::Tensor(out);)
@@ -755,7 +761,7 @@ void ato_set_momentum_group(optimizer t, size_t group, double momentum) {
         adamw->betas(std::tuple<double, double>(momentum, get<1>(betas)));
       } else if (auto rms = dynamic_cast<torch::optim::RMSpropOptions *>(d)) {
         rms->momentum(momentum);
-      } if (auto sgd = dynamic_cast<torch::optim::SGDOptions *>(d)) {
+      } else if (auto sgd = dynamic_cast<torch::optim::SGDOptions *>(d)) {
         sgd->momentum(momentum);
       } else throw std::invalid_argument("unexpected optimizer");)
 }

@@ -56,6 +56,10 @@ impl Sequential {
     pub fn forward_all(&self, xs: &Tensor, n: Option<usize>) -> Vec<Tensor> {
         if self.layers.is_empty() {
             vec![xs.shallow_clone()]
+        } else if n == Some(0) {
+            // The take(n) below only limits the layers after the first, so
+            // guard n == 0 explicitly instead of always running layers[0].
+            vec![]
         } else {
             let n = n.unwrap_or(self.layers.len());
             let xs = self.layers[0].forward(xs);
@@ -133,6 +137,10 @@ impl SequentialT {
     pub fn forward_all_t(&self, xs: &Tensor, train: bool, n: Option<usize>) -> Vec<Tensor> {
         if self.layers.is_empty() {
             vec![xs.shallow_clone()]
+        } else if n == Some(0) {
+            // The take(n) below only limits the layers after the first, so
+            // guard n == 0 explicitly instead of always running layers[0].
+            vec![]
         } else {
             let n = n.unwrap_or(self.layers.len());
             let xs = self.layers[0].forward_t(xs, train);

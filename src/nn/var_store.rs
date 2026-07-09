@@ -197,7 +197,13 @@ impl VarStore {
     ///
     /// Updates the precision of the destination to match the source
     fn copy_data_with_precision_update(src: &Tensor, dst: &mut Tensor) -> Result<(), TchError> {
-        dst.set_data(&dst.to_kind(src.kind()));
+        // Only re-tag the destination when the checkpoint dtype actually
+        // differs: `to_kind` materializes a fresh tensor and `set_data` swaps
+        // it in, so doing this unconditionally allocated + copied every
+        // variable on the common same-dtype load path for nothing.
+        if dst.kind() != src.kind() {
+            dst.set_data(&dst.to_kind(src.kind()));
+        }
         dst.f_copy_(src)
     }
 
@@ -375,7 +381,6 @@ impl VarStore {
     pub fn copy(&mut self, src: &VarStore) -> Result<(), TchError> {
         let mut variables = self.variables_.lock().unwrap();
         let src_variables = src.variables_.lock().unwrap();
-        let device = self.device;
         for name in variables.named_variables.keys() {
             if !src_variables.named_variables.contains_key(name) {
                 return Err(TchError::TensorNameNotFound(
@@ -386,7 +391,9 @@ impl VarStore {
         }
         for (name, var) in variables.named_variables.iter_mut() {
             let src_var = src_variables.named_variables.get(name).unwrap();
-            crate::no_grad(|| var.f_copy_(&src_var.to_device(device)))?;
+            // copy_ performs the cross-device transfer itself; going through
+            // to_device first would materialize an extra intermediate copy.
+            crate::no_grad(|| var.f_copy_(src_var))?;
         }
         Ok(())
     }
@@ -836,7 +843,10 @@ impl Entry<'_> {
     /// variable is added to the var-store with the entry name and is
     /// initialized according to the init parameter.
     pub fn or_var(self, dims: &[i64], init: Init) -> Tensor {
-        let v = super::init(init, dims, self.path.device());
+        // Match Path::var: honor the var-store kind rather than hardcoding
+        // Float, so entries created after e.g. `vs.half()` stay consistent
+        // with variables created through the regular Path API.
+        let v = super::f_init(init, dims, self.path.device(), self.path.kind()).unwrap();
         self.path.get_or_add_with_lock(self.name, v, true, self.variables)
     }
 

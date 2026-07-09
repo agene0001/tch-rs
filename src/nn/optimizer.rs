@@ -214,13 +214,18 @@ impl Optimizer {
 
     /// Clips gradient value at some specified maximum value.
     pub fn clip_grad_value(&self, max: f64) {
-        let v = self.variables.lock().unwrap();
-        for var in v.trainable_variables.iter() {
-            let mut grad = var.tensor.grad();
-            if grad.defined() {
-                let _t = grad.clamp_(-max, max);
+        // Match PyTorch's clip_grad_value_, which runs under no_grad: an
+        // in-place clamp on a grad that itself requires grad (create_graph)
+        // must not be recorded into the autograd graph.
+        crate::no_grad(|| {
+            let v = self.variables.lock().unwrap();
+            for var in v.trainable_variables.iter() {
+                let mut grad = var.tensor.grad();
+                if grad.defined() {
+                    let _t = grad.clamp_(-max, max);
+                }
             }
-        }
+        })
     }
 
     /// Clips gradient L2 norm over all trainable parameters.
@@ -244,12 +249,15 @@ impl Optimizer {
             // of reading the norm back: a host read would synchronize the
             // CUDA stream on every step. Multiplying by an exact 1.0 leaves
             // unclipped gradients bit-identical.
+            // The stack above requires every grad norm to live on a single
+            // device, so clip_coef is already colocated with all the grads:
+            // no per-parameter to_device dispatch is needed.
             let total_norm = Tensor::stack(&norms, 0).norm();
             let clip_coef = (max / (total_norm + 1e-6)).clamp_max(1.0);
             for var in v.trainable_variables.iter() {
                 let mut grad = var.tensor.grad();
                 if grad.defined() {
-                    let _t = grad.g_mul_(&clip_coef.to_device(grad.device()));
+                    let _t = grad.g_mul_(&clip_coef);
                 }
             }
         })

@@ -22,7 +22,7 @@ pub trait RNN {
     /// features] otherwise. The initial state is the result of applying
     /// zero_state.
     fn seq(&self, input: &Tensor) -> (Tensor, Self::State) {
-        let batch_dim = input.size()[0];
+        let batch_dim = input.size_at(0);
         let state = self.zero_state(batch_dim);
         self.seq_init(input, &state)
     }
@@ -193,7 +193,7 @@ impl RNN for LSTM {
 
     fn seq(&self, input: &Tensor) -> (Tensor, LSTMState) {
         // The batch dimension comes second when batch_first is unset.
-        let batch_dim = if self.config.batch_first { input.size()[0] } else { input.size()[1] };
+        let batch_dim = if self.config.batch_first { input.size_at(0) } else { input.size_at(1) };
         let state = self.zero_state(batch_dim);
         self.seq_init(input, &state)
     }
@@ -285,7 +285,7 @@ impl RNN for GRU {
 
     fn seq(&self, input: &Tensor) -> (Tensor, GRUState) {
         // The batch dimension comes second when batch_first is unset.
-        let batch_dim = if self.config.batch_first { input.size()[0] } else { input.size()[1] };
+        let batch_dim = if self.config.batch_first { input.size_at(0) } else { input.size_at(1) };
         let state = self.zero_state(batch_dim);
         self.seq_init(input, &state)
     }

@@ -325,26 +325,29 @@ impl Tensor {
             }
         }
 
-        // Apply indexing from left to right
-        let mut curr_tensor = self.shallow_clone();
+        // Apply indexing from left to right. `curr_tensor` stays None until an
+        // op actually materializes a new tensor, so the common single-narrow /
+        // single-select lookup does not pay for a shallow clone of `self`.
+        let mut curr_tensor: Option<Tensor> = None;
         let mut curr_idx: i64 = 0;
 
         for spec in index_spec.iter() {
+            let tensor = curr_tensor.as_ref().unwrap_or(self);
             let (next_tensor, next_idx) = match spec {
-                InsertNewAxis => (curr_tensor.unsqueeze(curr_idx), curr_idx + 1),
+                InsertNewAxis => (Some(tensor.unsqueeze(curr_idx)), curr_idx + 1),
                 Select(index) => (
-                    curr_tensor.select(curr_idx, *index),
+                    Some(tensor.select(curr_idx, *index)),
                     curr_idx, // not advanced because select() squeezes dimension
                 ),
                 Narrow(start, end) => {
                     if let Some((start, length)) = match (start, end) {
                         (Unbounded, Unbounded) => None,
                         (Included(start), Unbounded) => {
-                            let dim_len = curr_tensor.size_at(curr_idx as usize);
+                            let dim_len = tensor.size_at(curr_idx as usize);
                             Some((*start, dim_len - *start))
                         }
                         (Excluded(start), Unbounded) => {
-                            let dim_len = curr_tensor.size_at(curr_idx as usize);
+                            let dim_len = tensor.size_at(curr_idx as usize);
                             Some((*start + 1, dim_len - *start - 1))
                         }
                         (Unbounded, Included(end)) => Some((0, *end + 1)),
@@ -354,19 +357,27 @@ impl Tensor {
                         (Excluded(start), Included(end)) => Some((*start + 1, *end - *start)),
                         (Excluded(start), Excluded(end)) => Some((*start + 1, *end - *start - 1)),
                     } {
-                        (curr_tensor.f_narrow(curr_idx, start, length.max(0))?, curr_idx + 1)
+                        (Some(tensor.f_narrow(curr_idx, start, length.max(0))?), curr_idx + 1)
                     } else {
-                        (curr_tensor, curr_idx + 1)
+                        // Full-range slice: nothing to materialize.
+                        (None, curr_idx + 1)
                     }
                 }
                 IndexSelect(index_tensor) => {
-                    let index_tensor = index_tensor.to_device(curr_tensor.device());
-                    (curr_tensor.index_select(curr_idx, &index_tensor), curr_idx + 1)
+                    // Only move the index when it actually lives elsewhere.
+                    let selected = if index_tensor.device() == tensor.device() {
+                        tensor.index_select(curr_idx, index_tensor)
+                    } else {
+                        tensor.index_select(curr_idx, &index_tensor.to_device(tensor.device()))
+                    };
+                    (Some(selected), curr_idx + 1)
                 }
             };
-            curr_tensor = next_tensor;
+            if let Some(t) = next_tensor {
+                curr_tensor = Some(t);
+            }
             curr_idx = next_idx;
         }
-        Ok(curr_tensor)
+        Ok(curr_tensor.unwrap_or_else(|| self.shallow_clone()))
     }
 }

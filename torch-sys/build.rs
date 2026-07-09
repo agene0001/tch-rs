@@ -438,6 +438,10 @@ impl SystemInfo {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Declare custom cfgs we emit so the Rust 2024 unknown-cfg lint is silent.
+    // This has to run unconditionally: doc-only builds skip the block below
+    // but still compile the `#[cfg(use_cuda)]` sites.
+    println!("cargo:rustc-check-cfg=cfg(use_cuda)");
     if !cfg!(feature = "doc-only") {
         let system_info = SystemInfo::new()?;
         // use_cuda is a hacky way to detect whether cuda is available and
@@ -463,9 +467,6 @@ fn main() -> anyhow::Result<()> {
         //
         // Update: it seems that the dummy dependency is not necessary anymore, so just
         // removing it and keeping this comment around for legacy.
-        // Declare custom cfgs we emit so the Rust 2024 unknown-cfg lint is silent.
-        println!("cargo:rustc-check-cfg=cfg(use_cuda)");
-
         let si_lib = &system_info.libtorch_lib_dir;
         let use_cuda =
             si_lib.join("libtorch_cuda.so").exists() || si_lib.join("torch_cuda.dll").exists();

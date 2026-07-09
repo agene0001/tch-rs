@@ -236,10 +236,13 @@ impl Iterator for TextDataIter {
             None
         } else {
             self.batch_index += 1;
-            let indexes = Vec::<i64>::try_from(&self.indexes.i(start..start + size)).unwrap();
-            let batch: Vec<_> = indexes.iter().map(|&i| self.data.i(i..i + self.seq_len)).collect();
-            let batch: Vec<_> = batch.iter().collect();
-            Some(Tensor::stack(&batch, 0))
+            // Gather every window in two tensor ops instead of copying the
+            // index values back to the host and issuing one narrow + stack
+            // per sequence: window (b, j) reads data[start_b + j].
+            let starts = self.indexes.i(start..start + size);
+            let idx = starts.unsqueeze(1) + Tensor::arange(self.seq_len, kind::INT64_CPU);
+            let idx = idx.reshape([-1]).to_device(self.data.device());
+            Some(self.data.index_select(0, &idx).view([size, self.seq_len]))
         }
     }
 }

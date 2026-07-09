@@ -176,14 +176,14 @@ impl Tensor {
     }
 
     pub fn random_batch(&self, batch_size: i64) -> Tensor {
-        let len: i64 = self.size()[0];
+        let len: i64 = self.size_at(0);
         let index = Tensor::randint(len, [batch_size], (Kind::Int64, self.device()));
         self.index_select(0, &index)
     }
 
     pub fn random_batch2(t1: &Tensor, t2: &Tensor, batch_size: i64) -> (Tensor, Tensor) {
-        let len1: i64 = t1.size()[0];
-        let len2: i64 = t2.size()[0];
+        let len1: i64 = t1.size_at(0);
+        let len2: i64 = t2.size_at(0);
         if len1 != len2 {
             panic!("random_batch2: shape mismatch {:?} {:?}", t1.size(), t2.size())
         }
@@ -222,7 +222,7 @@ impl Tensor {
     /// This returns a flattened version of the given tensor. The first dimension
     /// is preserved as it is assumed to be the mini-batch dimension.
     pub fn flat_view(&self) -> Tensor {
-        self.view((self.size()[0], -1))
+        self.view((self.size_at(0), -1))
     }
 
     /// Converts a tensor to a one-hot encoded version.
@@ -231,7 +231,11 @@ impl Tensor {
     /// [N1, ..., Nk, labels]. The returned tensor uses float values.
     /// Elements of the input vector are expected to be between 0 and labels-1.
     pub fn onehot(&self, labels: i64) -> Tensor {
-        Tensor::zeros([self.size(), vec![labels]].concat(), (Kind::Float, self.device()))
+        // Append the label dimension onto the shape Vec in place rather than
+        // building two Vecs and concatenating them.
+        let mut shape = self.size();
+        shape.push(labels);
+        Tensor::zeros(shape, (Kind::Float, self.device()))
             .scatter_value_(-1, &self.unsqueeze(-1).to_kind(Kind::Int64), 1.0)
     }
 

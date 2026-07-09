@@ -205,7 +205,7 @@ impl ModuleT for MBConv {
             // sample with probability p, rescaling kept rows by 1/(1 - p).
             let ys = if t && self.stochastic_depth_prob > 0. {
                 let survival = 1.0 - self.stochastic_depth_prob;
-                let noise = Tensor::rand([ys.size()[0], 1, 1, 1], (ys.kind(), ys.device()))
+                let noise = Tensor::rand([ys.size_at(0), 1, 1, 1], (ys.kind(), ys.device()))
                     .lt(survival)
                     .to_kind(ys.kind());
                 ys * noise / survival

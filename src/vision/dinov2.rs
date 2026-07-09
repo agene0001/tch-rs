@@ -96,10 +96,13 @@ struct Block {
 
 impl Block {
     fn new(vs: nn::Path, dim: i64, num_heads: i64) -> Self {
-        let norm1 = nn::layer_norm(&vs / "norm1", vec![dim], Default::default());
+        // DINOv2 builds every transformer LayerNorm with eps=1e-6
+        // (`partial(nn.LayerNorm, eps=1e-6)`), not tch's 1e-5 default.
+        let ln_cfg = nn::LayerNormConfig { eps: 1e-6, ..Default::default() };
+        let norm1 = nn::layer_norm(&vs / "norm1", vec![dim], ln_cfg);
         let attn = Attention::new(&vs / "attn", dim, num_heads, true, true);
         let ls1 = LayerScale::new(&vs / "ls1", dim);
-        let norm2 = nn::layer_norm(&vs / "norm2", vec![dim], Default::default());
+        let norm2 = nn::layer_norm(&vs / "norm2", vec![dim], ln_cfg);
         let mlp = Mlp::new(&vs / "mlp", dim, dim * 4, true);
         let ls2 = LayerScale::new(&vs / "ls2", dim);
         Self { norm1, attn, ls1, norm2, mlp, ls2 }
@@ -167,22 +170,26 @@ impl DinoVisionTransformer {
             nn::Init::Const(0.),
         );
         let head = nn::linear(vs / "head", 2 * embed_dim, NUM_CLASSES, Default::default());
-        let norm = nn::layer_norm(vs / "norm", vec![embed_dim], Default::default());
+        let norm = nn::layer_norm(
+            vs / "norm",
+            vec![embed_dim],
+            nn::LayerNormConfig { eps: 1e-6, ..Default::default() },
+        );
         let blocks =
             (0..depth).map(|i| Block::new(vs / "blocks" / i, embed_dim, num_heads)).collect();
         Self { patch_embed, cls_token, pos_embed, blocks, norm, head }
     }
 
     pub fn interpolate_pos_encoding(&self, xs: &Tensor, w: i64, h: i64) -> Tensor {
-        let npatch = xs.size()[1] - 1;
-        let n = self.pos_embed.size()[1] - 1;
+        let npatch = xs.size_at(1) - 1;
+        let n = self.pos_embed.size_at(1) - 1;
         let sqrt_n = (n as f64).sqrt();
         if npatch == n && w == h {
             return xs.shallow_clone();
         }
         let class_pos_embed = self.pos_embed.i((.., ..1));
         let patch_pos_embed = self.pos_embed.i((.., 1..));
-        let dim = *xs.size().last().unwrap();
+        let dim = xs.size_at(2);
         let (w0, h0) = ((w / PATCH_SIZE) as f64 + 0.1, (h / PATCH_SIZE) as f64 + 0.1);
         let patch_pos_embed = patch_pos_embed
             .reshape([1, sqrt_n as i64, sqrt_n as i64, dim])
