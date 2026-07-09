@@ -743,3 +743,210 @@ fn bench_shuffle_and_clip() {
     }
     println!("50 backward+clip_grad_norm steps: {:?}", start.elapsed());
 }
+
+// ---------------------------------------------------------------------------
+// Round-2 fixes: regression tests.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bf16_elements_roundtrip() {
+    // bf16 was mis-tagged as Kind::Half (fp16), silently reinterpreting the
+    // bits; from_slice must produce a BFloat16 tensor that round-trips.
+    let vals: Vec<half::bf16> =
+        [0.5f32, -1.25, 3.0, 100.0].iter().map(|&v| half::bf16::from_f32(v)).collect();
+    let t = Tensor::from_slice(&vals);
+    assert_eq!(t.kind(), Kind::BFloat16);
+    assert_eq!(Vec::<half::bf16>::try_from(&t).unwrap(), vals);
+    // And the values must be numerically right, not just bit-preserved.
+    assert_eq!(f64::try_from(t.sum(Kind::Double)).unwrap(), 102.25);
+}
+
+#[test]
+fn set_momentum_group_works_for_adam() {
+    // ato_set_momentum_group was missing an `else`, so any non-SGD optimizer
+    // set the value and then threw "unexpected optimizer".
+    let vs = nn::VarStore::new(Device::Cpu);
+    let _w = vs.root().var("w", &[4], nn::Init::Const(0.));
+    let mut opt = nn::Adam::default().build(&vs, 1e-3).unwrap();
+    opt.set_momentum_group(0, 0.8);
+}
+
+#[test]
+fn text_data_iter_yields_contiguous_windows() {
+    // The vectorized TextDataIter must still return [batch, seq_len] windows
+    // of consecutive positions. Labels are assigned in first-appearance order
+    // over a cyclic alphabet, so consecutive positions differ by 1 mod 26.
+    let path = std::env::temp_dir().join("tch_test_text_windows.txt");
+    let bytes: Vec<u8> = (0..10_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+    std::fs::write(&path, &bytes).unwrap();
+    let text = tch::data::TextData::new(&path).unwrap();
+    let (seq_len, batch_size) = (17i64, 8i64);
+    let mut nbatches = 0;
+    for batch in text.iter_shuffle(seq_len, batch_size).take(10) {
+        assert_eq!(batch.size(), [batch_size, seq_len]);
+        for row in Vec::<Vec<i64>>::try_from(&batch.to_kind(Kind::Int64)).unwrap() {
+            for j in 1..row.len() {
+                assert_eq!((row[j] - row[j - 1]).rem_euclid(26), 1, "row {row:?}");
+            }
+        }
+        nbatches += 1;
+    }
+    assert_eq!(nbatches, 10);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn forward_all_zero_layers_requested() {
+    // forward_all(_, Some(0)) used to run layers[0] anyway.
+    let vs = nn::VarStore::new(Device::Cpu);
+    let seq = nn::seq().add(nn::linear(vs.root() / "l", 4, 4, Default::default()));
+    let xs = Tensor::zeros([2, 4], (Kind::Float, Device::Cpu));
+    assert!(seq.forward_all(&xs, Some(0)).is_empty());
+    assert_eq!(seq.forward_all(&xs, Some(1)).len(), 1);
+    assert_eq!(seq.forward_all(&xs, None).len(), 1);
+}
+
+#[test]
+fn entry_or_var_honors_store_kind() {
+    // Entry::or_var hardcoded Kind::Float, ignoring vs.half()/bfloat16().
+    let mut vs = nn::VarStore::new(Device::Cpu);
+    vs.half();
+    let t = vs.root().entry("w").or_var(&[4], nn::Init::Const(1.));
+    assert_eq!(t.kind(), Kind::Half);
+}
+
+#[test]
+#[should_panic(expected = "divisible")]
+fn group_norm_validates_channels() {
+    // PyTorch raises at construction; we now assert instead of failing with
+    // an opaque aten error at the first forward.
+    let vs = nn::VarStore::new(Device::Cpu);
+    let _gn = nn::group_norm(vs.root(), 3, 10, Default::default());
+}
+
+#[test]
+fn indexing_matches_previous_semantics() {
+    // The .i() fast path (no upfront shallow clone) must keep identical
+    // results across single and mixed index specs.
+    use tch::IndexOp;
+    let t = Tensor::arange(24, (Kind::Int64, Device::Cpu)).view([2, 3, 4]);
+    assert_eq!(t.i(1).size(), [3, 4]);
+    assert_eq!(t.i((.., 1..3)).size(), [2, 2, 4]);
+    assert_eq!(t.i((.., .., ..)).size(), [2, 3, 4]);
+    assert_eq!(i64::try_from(t.i((1, 2, 3))).unwrap(), 23);
+    let idx = Tensor::from_slice(&[2i64, 0]);
+    let sel = t.i((.., &idx));
+    assert_eq!(sel.size(), [2, 2, 4]);
+    assert_eq!(i64::try_from(sel.i((0, 0, 0))).unwrap(), 8);
+    // Full-range slice of a 1-d tensor still returns an equal tensor.
+    let v = Tensor::from_slice(&[1i64, 2, 3]);
+    assert_eq!(Vec::<i64>::try_from(v.i(..)).unwrap(), vec![1, 2, 3]);
+}
+
+/// Print-only timing comparisons for the round-2 optimizations; run with
+/// `cargo test --release -- --ignored --nocapture`. Items marked "rebuild"
+/// measure changes whose old version no longer exists in the tree: check out
+/// the previous commit for the baseline number.
+#[test]
+#[ignore]
+fn bench_round2_optimizations() {
+    use std::hint::black_box;
+    use std::time::Instant;
+    use tch::IndexOp;
+
+    // Single-narrow .i(): no upfront shallow clone per call (rebuild).
+    let t = Tensor::arange(4096, (Kind::Float, Device::Cpu));
+    let start = Instant::now();
+    for _ in 0..100_000 {
+        let _ = black_box(t.i(5..100));
+    }
+    println!("i(5..100) x100k:               {:?}", start.elapsed());
+
+    // Stack-allocated stride1 vs the Vec-allocating stride().
+    let start = Instant::now();
+    for _ in 0..200_000 {
+        let _ = black_box(t.stride1().unwrap());
+    }
+    println!("stride1 x200k:                 {:?}", start.elapsed());
+    let start = Instant::now();
+    for _ in 0..200_000 {
+        let _ = black_box(t.stride()[0]);
+    }
+    println!("stride() vec x200k:            {:?}", start.elapsed());
+
+    // flat_view via size_at (rebuild for the size()[0] baseline).
+    let images = Tensor::randn([64, 3, 32, 32], (Kind::Float, Device::Cpu));
+    let start = Instant::now();
+    for _ in 0..100_000 {
+        let _ = black_box(images.flat_view());
+    }
+    println!("flat_view x100k:               {:?}", start.elapsed());
+
+    // onehot shape built in place vs the two-Vec concat.
+    let labels = Tensor::randint(10, [4096], (Kind::Int64, Device::Cpu));
+    let start = Instant::now();
+    for _ in 0..2_000 {
+        let _ = black_box(labels.onehot(10));
+    }
+    println!("onehot x2k:                    {:?}", start.elapsed());
+    let start = Instant::now();
+    for _ in 0..2_000 {
+        let z = Tensor::zeros([labels.size(), vec![10]].concat(), (Kind::Float, Device::Cpu))
+            .scatter_value_(-1, &labels.unsqueeze(-1).to_kind(Kind::Int64), 1.0);
+        let _ = black_box(z);
+    }
+    println!("onehot concat-shape x2k:       {:?}", start.elapsed());
+
+    // TextDataIter through the real API vs the old host-roundtrip gather.
+    let path = std::env::temp_dir().join("tch_bench_text_data.txt");
+    let bytes: Vec<u8> = (0..1_000_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+    std::fs::write(&path, &bytes).unwrap();
+    let text = tch::data::TextData::new(&path).unwrap();
+    let (seq_len, batch_size) = (256i64, 64i64);
+    let start = Instant::now();
+    for batch in text.iter_shuffle(seq_len, batch_size).take(50) {
+        black_box(&batch);
+    }
+    println!("TextDataIter x50:              {:?}", start.elapsed());
+    let data = text.data();
+    let indexes = Tensor::randperm(1_000_000 - seq_len + 1, (Kind::Int64, Device::Cpu));
+    let start = Instant::now();
+    for b in 0..50i64 {
+        let batch_indexes =
+            Vec::<i64>::try_from(indexes.i(b * batch_size..(b + 1) * batch_size)).unwrap();
+        let batch: Vec<_> = batch_indexes.iter().map(|&i| data.i(i..i + seq_len)).collect();
+        let batch: Vec<_> = batch.iter().collect();
+        let _ = black_box(Tensor::stack(&batch, 0));
+    }
+    println!("old narrow+stack x50:          {:?}", start.elapsed());
+    let _ = std::fs::remove_file(&path);
+
+    // Same-dtype VarStore::load: to_kind/set_data per variable now skipped
+    // (rebuild).
+    let vs_path = std::env::temp_dir().join("tch_bench_vs.safetensors");
+    let vs = nn::VarStore::new(Device::Cpu);
+    for i in 0..200 {
+        let _ = vs.root().var(&format!("w{i}"), &[64, 64], nn::Init::Const(0.5));
+    }
+    vs.save(&vs_path).unwrap();
+    let mut vs2 = nn::VarStore::new(Device::Cpu);
+    for i in 0..200 {
+        let _ = vs2.root().var(&format!("w{i}"), &[64, 64], nn::Init::Const(0.));
+    }
+    let start = Instant::now();
+    for _ in 0..20 {
+        vs2.load(&vs_path).unwrap();
+    }
+    println!("VarStore::load same-kind x20:  {:?}", start.elapsed());
+    let _ = std::fs::remove_file(&vs_path);
+
+    // Image resize: output buffer is torch::empty instead of torch::zeros in
+    // torch_api.cpp; also covers at_load_image (rebuild).
+    let img =
+        Tensor::randint(256, [3, 1080, 1920], (Kind::Int64, Device::Cpu)).to_kind(Kind::Uint8);
+    let start = Instant::now();
+    for _ in 0..50 {
+        let _ = black_box(tch::vision::image::resize(&img, 224, 224).unwrap());
+    }
+    println!("image resize 1080p->224 x50:   {:?}", start.elapsed());
+}
