@@ -193,28 +193,34 @@ impl VarStore {
         Ok(named_tensors?.into_iter().collect())
     }
 
-    /// Copies the data from source tensor to destination
+    /// Copies a checkpoint tensor into a destination variable.
     ///
-    /// Updates the precision of the destination to match the source
-    fn copy_data_with_precision_update(src: &Tensor, dst: &mut Tensor) -> Result<(), TchError> {
-        // Only re-tag the destination when the checkpoint dtype actually
-        // differs: `to_kind` materializes a fresh tensor and `set_data` swaps
-        // it in, so doing this unconditionally allocated + copied every
-        // variable on the common same-dtype load path for nothing.
-        if dst.kind() != src.kind() {
+    /// With `update_precision`, the destination variable is re-tagged to the
+    /// checkpoint's dtype (e.g. a Float-built model becomes Half when loading
+    /// fp16 weights); otherwise the values are cast into the destination's
+    /// dtype, matching PyTorch's `load_state_dict` (`param.copy_`).
+    fn copy_data(src: &Tensor, dst: &mut Tensor, update_precision: bool) -> Result<(), TchError> {
+        // Only re-tag when the checkpoint dtype actually differs: `to_kind`
+        // materializes a fresh tensor and `set_data` swaps it in, so doing
+        // this unconditionally allocated + copied every variable on the
+        // common same-dtype load path for nothing.
+        if update_precision && dst.kind() != src.kind() {
             dst.set_data(&dst.to_kind(src.kind()));
         }
         dst.f_copy_(src)
     }
 
-    fn load_internal<T: AsRef<std::path::Path>>(&mut self, path: T) -> Result<(), TchError> {
+    fn load_internal<T: AsRef<std::path::Path>>(
+        &mut self,
+        path: T,
+        update_precision: bool,
+    ) -> Result<(), TchError> {
         let named_tensors = self.named_tensors(&path)?;
         let mut variables = self.variables_.lock().unwrap();
         for (name, var) in variables.named_variables.iter_mut() {
             match named_tensors.get(name) {
                 Some(src) => crate::no_grad(|| {
-                    Self::copy_data_with_precision_update(src, var)
-                        .map_err(|e| e.path_context(name))
+                    Self::copy_data(src, var, update_precision).map_err(|e| e.path_context(name))
                 })?,
                 None => {
                     return Err(TchError::TensorNameNotFound(
@@ -238,15 +244,41 @@ impl VarStore {
     /// - `.safetensors`: The file is assumed to be in safetensors format.
     /// - `.bin` or `.pt`: The file is assumed to be in pickle format.
     /// - Otherwise, the file is assumed to be in libtorch C++ module format.
+    ///
+    /// Checkpoint values are cast into each variable's existing dtype,
+    /// matching PyTorch's `load_state_dict`; use
+    /// [`VarStore::load_with_precision_update`] to instead adopt the
+    /// checkpoint's dtypes.
     pub fn load<T: AsRef<std::path::Path>>(&mut self, path: T) -> Result<(), TchError> {
+        self.load_with_mps_workaround(path, false)
+    }
+
+    /// Loads the var-store variable values from a file, adopting each
+    /// checkpoint tensor's dtype.
+    ///
+    /// Same as [`VarStore::load`] except that each variable is re-tagged to
+    /// the dtype stored in the checkpoint, so e.g. loading fp16 weights into
+    /// a Float-built model turns the model into an fp16 one.
+    pub fn load_with_precision_update<T: AsRef<std::path::Path>>(
+        &mut self,
+        path: T,
+    ) -> Result<(), TchError> {
+        self.load_with_mps_workaround(path, true)
+    }
+
+    fn load_with_mps_workaround<T: AsRef<std::path::Path>>(
+        &mut self,
+        path: T,
+        update_precision: bool,
+    ) -> Result<(), TchError> {
         if self.device != Device::Mps {
-            self.load_internal(path)
+            self.load_internal(path, update_precision)
         } else {
             // Current workaround to allow loading in MPS device.
             // On new libtorch releases check if direct loading becomes possible and revert
             // See (https://github.com/LaurentMazare/tch-rs/issues/609#issuecomment-1427071598).
             self.set_device(Device::Cpu);
-            let or_error = self.load_internal(path);
+            let or_error = self.load_internal(path, update_precision);
             // Be cautious not to early exit so as to ensure that the device is set back to Mps
             // even on errors.
             self.set_device(Device::Mps);
@@ -259,7 +291,8 @@ impl VarStore {
     /// Weight values for all the tensors currently stored in the
     /// var-store gets loaded from the given stream. Note that the set of
     /// variables stored in the var-store is not changed, only the values
-    /// for these tensors are modified.
+    /// for these tensors are modified. Values are cast into each variable's
+    /// existing dtype, matching PyTorch's `load_state_dict`.
     pub fn load_from_stream<S: Read + Seek>(&mut self, stream: S) -> Result<(), TchError> {
         let adapter = ReadSeekAdapter::new(stream);
         let named_tensors = Tensor::load_multi_from_stream_with_device(adapter, self.device)?;
@@ -268,8 +301,7 @@ impl VarStore {
         for (name, var) in variables.named_variables.iter_mut() {
             match named_tensors.get(name) {
                 Some(src) => crate::no_grad(|| {
-                    Self::copy_data_with_precision_update(src, var)
-                        .map_err(|e| e.path_context(name))
+                    Self::copy_data(src, var, false).map_err(|e| e.path_context(name))
                 })?,
                 None => {
                     return Err(TchError::TensorNameNotFound(
@@ -302,8 +334,7 @@ impl VarStore {
         for (name, var) in variables.named_variables.iter_mut() {
             match named_tensors.get(name) {
                 Some(src) => crate::no_grad(|| {
-                    Self::copy_data_with_precision_update(src, var)
-                        .map_err(|e| e.path_context(name))
+                    Self::copy_data(src, var, false).map_err(|e| e.path_context(name))
                 })?,
                 None => {
                     missing_variables.push(name.to_owned());

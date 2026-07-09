@@ -950,3 +950,27 @@ fn bench_round2_optimizations() {
     }
     println!("image resize 1080p->224 x50:   {:?}", start.elapsed());
 }
+
+#[test]
+fn load_preserves_model_dtype_like_pytorch() {
+    // PyTorch load_state_dict casts checkpoint values into each parameter's
+    // dtype; adopting the checkpoint's dtype takes the explicit variant.
+    let filename = std::env::temp_dir().join(format!("tch-load-dtype-{}", std::process::id()));
+    let mut vs1 = nn::VarStore::new(Device::Cpu);
+    let _w1 = vs1.root().var("w", &[8], nn::Init::Const(1.5));
+    vs1.half();
+    vs1.save(&filename).unwrap();
+
+    let mut vs2 = nn::VarStore::new(Device::Cpu);
+    let w2 = vs2.root().var("w", &[8], nn::Init::Const(0.));
+    vs2.load(&filename).unwrap();
+    assert_eq!(w2.kind(), Kind::Float);
+    assert_eq!(f64::try_from(w2.mean(Kind::Float)).unwrap(), 1.5);
+
+    let mut vs3 = nn::VarStore::new(Device::Cpu);
+    let w3 = vs3.root().var("w", &[8], nn::Init::Const(0.));
+    vs3.load_with_precision_update(&filename).unwrap();
+    assert_eq!(w3.kind(), Kind::Half);
+    assert_eq!(f64::try_from(w3.mean(Kind::Half)).unwrap(), 1.5);
+    let _ = std::fs::remove_file(&filename);
+}

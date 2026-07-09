@@ -575,11 +575,20 @@ tensor at_resize_image(tensor tensor, int out_w, int out_h) {
       int h = sizes[0]; int w = sizes[1]; int c = sizes[2];
       auto tmp_tensor = tensor->contiguous();
       const unsigned char *tensor_data = (unsigned char *)tmp_tensor.data_ptr();
-      // empty: stbir_resize_uint8 writes every output byte, so zero-filling
+      // empty: the resize below writes every output byte, so zero-filling
       // first would be redundant work.
       torch::Tensor out = torch::empty({out_h, out_w, c}, at::ScalarType::Byte);
-      stbir_resize_uint8(tensor_data, w, h, 0, (unsigned char *)out.data_ptr(),
-                         out_w, out_h, 0, c);
+      // Triangle filter = bilinear-with-antialias resampling, matching the
+      // torchvision/PIL `Resize` default (bilinear, antialias=True) instead
+      // of the stb default Catmull-Rom/Mitchell cubics, so images resized
+      // here feed pretrained torchvision models the pixels they expect.
+      // LINEAR colorspace filters raw byte values without a gamma round
+      // trip, which is also what PIL/torchvision do.
+      if (!stbir_resize_uint8_generic(
+              tensor_data, w, h, 0, (unsigned char *)out.data_ptr(), out_w,
+              out_h, 0, c, STBIR_ALPHA_CHANNEL_NONE, 0, STBIR_EDGE_CLAMP,
+              STBIR_FILTER_TRIANGLE, STBIR_COLORSPACE_LINEAR, nullptr))
+        throw std::invalid_argument("stbir_resize_uint8_generic failed");
       return new torch::Tensor(out);)
   return nullptr;
 }
