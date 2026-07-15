@@ -197,6 +197,10 @@ module Func = struct
       | String -> Printf.sprintf "char* %s_ptr, int %s_len" arg_name arg_name
       | Int64Option -> Printf.sprintf "int64_t %s_v, uint8_t %s_null" arg_name arg_name
       | DoubleOption -> Printf.sprintf "double %s_v, uint8_t %s_null" arg_name arg_name
+      (* Scalars are passed by value and rebuilt inside the wrapper, saving a
+         C++ heap alloc/free plus two FFI crossings per scalar argument. *)
+      | Scalar ->
+        Printf.sprintf "double %s_d, int64_t %s_i, int8_t %s_is_int" arg_name arg_name arg_name
       | otherwise ->
         let simple_type_cstring =
           match otherwise with
@@ -208,8 +212,8 @@ module Func = struct
           | ScalarType -> "int"
           | ScalarTypeOption -> "int"
           | Device -> "int"
-          | Scalar -> "scalar"
           | Layout | LayoutOption -> "int8_t"
+          | Scalar
           | Int64Option
           | DoubleOption
           | String
@@ -226,7 +230,13 @@ module Func = struct
   let c_args_list args =
     List.map args ~f:(fun { arg_name; arg_type; _ } ->
       match arg_type with
-      | Scalar | Tensor -> "*" ^ arg_name
+      | Tensor -> "*" ^ arg_name
+      | Scalar ->
+        Printf.sprintf
+          "(%s_is_int ? at::Scalar((int64_t)%s_i) : at::Scalar(%s_d))"
+          arg_name
+          arg_name
+          arg_name
       | Layout -> Printf.sprintf "static_cast<at::Layout>(%s)" arg_name
       | LayoutOption ->
         Printf.sprintf
@@ -324,7 +334,7 @@ module Func = struct
       | Double -> single_param "f64"
       | Tensor -> single_param "*mut C_tensor"
       | TensorOption -> single_param "*mut C_tensor"
-      | Scalar -> single_param "*mut C_scalar"
+      | Scalar -> Printf.sprintf "%s_d: f64, %s_i: i64, %s_is_int: i8" an an an
       | ScalarType | ScalarTypeOption -> single_param "c_int"
       | Device -> single_param "c_int"
       | String -> Printf.sprintf "%s_ptr: *const u8, %s_len: c_int" an an
@@ -455,7 +465,8 @@ module Func = struct
       in
       match arg.arg_type with
       | Tensor -> Printf.sprintf "%s.c_tensor" name
-      | Scalar -> Printf.sprintf "%s.into().c_scalar" name
+      | Scalar ->
+        Printf.sprintf "%s.d_value(), %s.i_value(), %s.is_int_scalar()" name name name
       | Bool -> Printf.sprintf "if %s { 1 } else { 0 }" name
       | ScalarType -> Printf.sprintf "%s.c_int()" name
       | ScalarTypeOption -> Printf.sprintf "%s.into().map_or(-1, |s| s.c_int())" name
@@ -607,17 +618,20 @@ let write_cpp funcs filename =
       Map.iteri funcs ~f:(fun ~key:exported_name ~data:func ->
         let c_typed_args_list = Func.c_typed_args_list func in
         match func.returns with
+        (* The `nothing`/`fixed` wrappers return nullptr on success and the
+           strdup'ed error message on failure so the Rust side doesn't need a
+           second FFI crossing to poll the thread-local error slot. *)
         | `nothing ->
-          pc "void atg_%s(%s) {" exported_name c_typed_args_list;
-          pc "  PROTECT(";
+          pc "char *atg_%s(%s) {" exported_name c_typed_args_list;
+          pc "  PROTECT_ERR(";
           pc "    %s;" (Func.c_call func);
           pc "  )";
           pc "}";
           pc "";
-          ph "void atg_%s(%s);" exported_name c_typed_args_list
+          ph "char *atg_%s(%s);" exported_name c_typed_args_list
         | `fixed ntensors ->
-          pc "void atg_%s(tensor *out__, %s) {" exported_name c_typed_args_list;
-          pc "  PROTECT(";
+          pc "char *atg_%s(tensor *out__, %s) {" exported_name c_typed_args_list;
+          pc "  PROTECT_ERR(";
           pc "    auto outputs__ = %s;" (Func.c_call func);
           if ntensors = 1
           then pc "    out__[0] = new torch::Tensor(outputs__);"
@@ -628,7 +642,7 @@ let write_cpp funcs filename =
           pc "  )";
           pc "}";
           pc "";
-          ph "void atg_%s(tensor *, %s);" exported_name c_typed_args_list
+          ph "char *atg_%s(tensor *, %s);" exported_name c_typed_args_list
         | `dynamic ->
           pc "tensor *atg_%s(%s) {" exported_name c_typed_args_list;
           pc "  PROTECT(";
@@ -675,14 +689,43 @@ let write_fallible_wrapper funcs filename =
     pm "use std::convert::Into;";
     pm "use std::borrow::Borrow;";
     pm "";
-    pm "fn ptr_list_opt<T: Borrow<Tensor>>(l: &[Option<T>]) -> Vec<*mut C_tensor> {";
-    pm
-      "    l.iter().map(|x| x.as_ref().map_or(std::ptr::null_mut(), |x| \
-       x.borrow().c_tensor)).collect()";
+    pm "// Tensor-list arguments are usually short (cat/stack/index/...): a";
+    pm "// fixed stack buffer avoids a heap allocation per call, falling back";
+    pm "// to a Vec only for longer lists.";
+    pm "enum PtrList {";
+    pm "    Stack([*mut C_tensor; 16]),";
+    pm "    Heap(Vec<*mut C_tensor>),";
     pm "}";
     pm "";
-    pm "fn ptr_list<T: Borrow<Tensor>>(l: &[T]) -> Vec<*mut C_tensor> {";
-    pm "    l.iter().map(|x| x.borrow().c_tensor).collect()";
+    pm "impl PtrList {";
+    pm "    fn as_ptr(&self) -> *const *mut C_tensor {";
+    pm "        match self {";
+    pm "            PtrList::Stack(a) => a.as_ptr(),";
+    pm "            PtrList::Heap(v) => v.as_ptr(),";
+    pm "        }";
+    pm "    }";
+    pm "";
+    pm "    fn from_iter(it: impl ExactSizeIterator<Item = *mut C_tensor>) -> PtrList {";
+    pm "        if it.len() <= 16 {";
+    pm "            let mut a = [std::ptr::null_mut(); 16];";
+    pm "            for (i, p) in it.enumerate() {";
+    pm "                a[i] = p;";
+    pm "            }";
+    pm "            PtrList::Stack(a)";
+    pm "        } else {";
+    pm "            PtrList::Heap(it.collect())";
+    pm "        }";
+    pm "    }";
+    pm "}";
+    pm "";
+    pm "fn ptr_list_opt<T: Borrow<Tensor>>(l: &[Option<T>]) -> PtrList {";
+    pm
+      "    PtrList::from_iter(l.iter().map(|x| x.as_ref().map_or(std::ptr::null_mut(), \
+       |x| x.borrow().c_tensor)))";
+    pm "}";
+    pm "";
+    pm "fn ptr_list<T: Borrow<Tensor>>(l: &[T]) -> PtrList {";
+    pm "    PtrList::from_iter(l.iter().map(|x| x.borrow().c_tensor))";
     pm "}";
     pm "";
     pm "impl Tensor {";
@@ -695,7 +738,7 @@ let write_fallible_wrapper funcs filename =
       pm "    )%s {" (Func.rust_return_type func ~fallible:true);
       List.iter func.args ~f:(fun arg ->
         match arg.arg_type with
-        | DoubleOption | Int64Option ->
+        | DoubleOption | Int64Option | Scalar ->
           let arg_name = Func.rust_name arg.arg_name in
           pm "        let %s = %s.into();" arg_name arg_name
         | _ -> ());
@@ -716,18 +759,20 @@ let write_fallible_wrapper funcs filename =
         pm "        Ok(r__)";
         pm "    }"
       | `nothing ->
-        pm "        unsafe_torch_err!(";
+        pm "        let err__ = unsafe {";
         pm "            atg_%s(" exported_name;
         pm "                %s" (Func.rust_binding_args func ~self);
-        pm "            ));";
+        pm "            )};";
+        pm "        crate::wrappers::utils::ptr_err_to_result(err__)?;";
         pm "        Ok(())";
         pm "    }"
       | `fixed ntensors ->
         pm "        let mut c_tensors = [std::ptr::null_mut(); %d];" ntensors;
-        pm "        unsafe_torch_err!(";
+        pm "        let err__ = unsafe {";
         pm "            atg_%s(c_tensors.as_mut_ptr()," exported_name;
         pm "                %s" (Func.rust_binding_args func ~self);
-        pm "            ));";
+        pm "            )};";
+        pm "        crate::wrappers::utils::ptr_err_to_result(err__)?;";
         let returns =
           if ntensors = 1
           then "Tensor { c_tensor: c_tensors[0] }"
@@ -792,16 +837,20 @@ let write_ffi funcs filename =
     let pm s = p out_ml s in
     pm "/* THIS FILE IS AUTOMATICALLY GENERATED, DO NOT EDIT BY HAND! */";
     pm "#[allow(clippy::all)]";
-    pm "use crate::{C_scalar, C_tensor};";
-    pm "use libc::c_int;";
+    pm "use crate::C_tensor;";
+    pm "use libc::{c_char, c_int};";
     pm "";
     pm "extern \"C\" {";
     Map.iteri funcs ~f:(fun ~key:exported_name ~data:func ->
       match func.Func.returns with
-      | `nothing -> pm "    pub fn atg_%s(%s);" exported_name (Func.c_rust_args_list func)
+      | `nothing ->
+        pm
+          "    pub fn atg_%s(%s) -> *mut c_char;"
+          exported_name
+          (Func.c_rust_args_list func)
       | `fixed _ ->
         pm
-          "    pub fn atg_%s(out__: *mut *mut C_tensor, %s);"
+          "    pub fn atg_%s(out__: *mut *mut C_tensor, %s) -> *mut c_char;"
           exported_name
           (Func.c_rust_args_list func)
       | `dynamic ->

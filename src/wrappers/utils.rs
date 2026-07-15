@@ -23,6 +23,17 @@ pub(super) fn read_and_clean_error() -> Result<(), TchError> {
     }
 }
 
+// Converts the error pointer returned by the generated `atg_*` wrappers
+// (null on success, strdup'ed message on failure) into a Result, freeing the
+// message. One FFI crossing per op instead of the two the thread-local
+// error-polling path costs.
+pub(crate) fn ptr_err_to_result(ptr: *mut c_char) -> Result<(), TchError> {
+    match unsafe { ptr_to_string(ptr) } {
+        None => Ok(()),
+        Some(c_error) => Err(TchError::Torch(c_error)),
+    }
+}
+
 macro_rules! unsafe_torch {
     ($e:expr) => {{
         let v = unsafe { $e };

@@ -1,61 +1,80 @@
 //! Scalar elements.
+//!
+//! `Scalar` used to wrap a heap-allocated C++ `torch::Scalar`, which cost two
+//! FFI crossings plus an allocation/free for every scalar argument of every
+//! op. It is now a plain Rust enum; the generated bindings pass the value by
+//! value across the FFI boundary and the C shim builds the `at::Scalar`
+//! inline. This also fixed a panic-in-Drop: the old Drop ran an error check
+//! that picked up pending op errors before the fallible `f_*` API could
+//! return them as `Err`.
 
 use crate::TchError;
 
 /// A single scalar value.
-pub struct Scalar {
-    pub(super) c_scalar: *mut torch_sys::C_scalar,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Scalar {
+    Int(i64),
+    Float(f64),
 }
 
 impl Scalar {
     /// Creates an integer scalar.
     pub fn int(v: i64) -> Scalar {
-        let c_scalar = unsafe_torch!(torch_sys::ats_int(v));
-        Scalar { c_scalar }
+        Scalar::Int(v)
     }
 
-    /// Creates a float scalar scalar.
+    /// Creates a float scalar.
     pub fn float(v: f64) -> Scalar {
-        let c_scalar = unsafe_torch!(torch_sys::ats_float(v));
-        Scalar { c_scalar }
+        Scalar::Float(v)
     }
 
-    /// Returns an integer value.
-    pub fn to_int(&self) -> Result<i64, TchError> {
-        let i = unsafe_torch_err!(torch_sys::ats_to_int(self.c_scalar));
-        Ok(i)
+    /// Returns an integer value, truncating toward zero like
+    /// `torch::Scalar::toLong`.
+    pub fn to_int(self) -> Result<i64, TchError> {
+        match self {
+            Scalar::Int(i) => Ok(i),
+            Scalar::Float(f) => Ok(f as i64),
+        }
     }
 
     /// Returns a float value.
-    pub fn to_float(&self) -> Result<f64, TchError> {
-        let f = unsafe_torch_err!(torch_sys::ats_to_float(self.c_scalar));
-        Ok(f)
+    pub fn to_float(self) -> Result<f64, TchError> {
+        match self {
+            Scalar::Int(i) => Ok(i as f64),
+            Scalar::Float(f) => Ok(f),
+        }
     }
 
-    /// Returns a string representation of the scalar.
+    /// Returns a string representation of the scalar, matching the C++
+    /// `operator<<` default of six significant digits for floats.
     pub fn to_string(&self) -> Result<String, TchError> {
-        let s = unsafe_torch_err!({
-            super::utils::ptr_to_string(torch_sys::ats_to_string(self.c_scalar))
-        });
-        match s {
-            None => Err(TchError::Kind("nullptr representation".to_string())),
-            Some(s) => Ok(s),
+        match self {
+            Scalar::Int(i) => Ok(i.to_string()),
+            Scalar::Float(f) => {
+                let rounded: f64 = format!("{f:.5e}").parse().unwrap_or(*f);
+                Ok(format!("{rounded}"))
+            }
         }
     }
-}
 
-impl std::fmt::Debug for Scalar {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.to_string() {
-            Err(_) => write!(f, "err"),
-            Ok(s) => write!(f, "scalar<{s}>"),
+    // Lowered representation used by the generated bindings: the C shim
+    // rebuilds the at::Scalar from (double, int64_t, is_int).
+    pub(crate) fn d_value(&self) -> f64 {
+        match self {
+            Scalar::Int(i) => *i as f64,
+            Scalar::Float(f) => *f,
         }
     }
-}
 
-impl Drop for Scalar {
-    fn drop(&mut self) {
-        unsafe_torch!(torch_sys::ats_free(self.c_scalar))
+    pub(crate) fn i_value(&self) -> i64 {
+        match self {
+            Scalar::Int(i) => *i,
+            Scalar::Float(f) => *f as i64,
+        }
+    }
+
+    pub(crate) fn is_int_scalar(&self) -> i8 {
+        matches!(self, Scalar::Int(_)) as i8
     }
 }
 
@@ -106,6 +125,6 @@ mod tests {
         let leet = Scalar::int(1337);
         assert_eq!(i64::from(&leet), 1337);
         assert_eq!(f64::from(&leet), 1337.);
-        assert_eq!(&format!("{pi:?}"), "scalar<3.14159>");
+        assert_eq!(&pi.to_string().unwrap(), "3.14159");
     }
 }
