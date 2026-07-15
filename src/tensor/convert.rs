@@ -4,6 +4,21 @@ use crate::{kind::Element, TchError};
 use half::{bf16, f16};
 use std::convert::{TryFrom, TryInto};
 
+// Copies the tensor's data into `dst`, converting the kind only when it
+// differs from `T` — the common already-matching case skips the `totype`
+// FFI round-trip and its shallow tensor.
+fn copy_data_as<T: Element + Copy>(
+    tensor: &Tensor,
+    dst: &mut [T],
+    numel: usize,
+) -> Result<(), TchError> {
+    if tensor.f_kind()? == T::KIND {
+        tensor.f_copy_data(dst, numel)
+    } else {
+        tensor.f_to_kind(T::KIND)?.f_copy_data(dst, numel)
+    }
+}
+
 impl<T: Element + Copy> TryFrom<&Tensor> for Vec<T> {
     type Error = TchError;
     fn try_from(tensor: &Tensor) -> Result<Self, Self::Error> {
@@ -16,7 +31,7 @@ impl<T: Element + Copy> TryFrom<&Tensor> for Vec<T> {
         }
         let numel = size[0] as usize;
         let mut vec = vec![T::ZERO; numel];
-        tensor.f_to_kind(T::KIND)?.f_copy_data(&mut vec, numel)?;
+        copy_data_as(tensor, &mut vec, numel)?;
         Ok(vec)
     }
 }
@@ -30,7 +45,7 @@ impl<T: Element + Copy> TryFrom<&Tensor> for Vec<Vec<T>> {
         let num_elem = s1 * s2;
         // TODO: Try to remove this intermediary copy.
         let mut all_elems = vec![T::ZERO; num_elem];
-        tensor.f_to_kind(T::KIND)?.f_copy_data(&mut all_elems, num_elem)?;
+        copy_data_as(tensor, &mut all_elems, num_elem)?;
         // Build the rows from contiguous chunks rather than indexing element by
         // element, which lets the compiler lower each row to a memcpy.
         // `chunks_exact` panics on a zero chunk size, so handle empty rows.
@@ -53,7 +68,7 @@ impl<T: Element + Copy> TryFrom<&Tensor> for Vec<Vec<Vec<T>>> {
         let num_elem = s1 * s2 * s3;
         // TODO: Try to remove this intermediary copy.
         let mut all_elems = vec![T::ZERO; num_elem];
-        tensor.f_to_kind(T::KIND)?.f_copy_data(&mut all_elems, num_elem)?;
+        copy_data_as(tensor, &mut all_elems, num_elem)?;
         // Slice into contiguous chunks rather than indexing element by element.
         // `chunks_exact` panics on a zero chunk size, so handle empty dims.
         let out = if s2 == 0 || s3 == 0 {
@@ -138,7 +153,7 @@ impl<T: Element + Copy> TryInto<ndarray::ArrayD<T>> for &Tensor {
     fn try_into(self) -> Result<ndarray::ArrayD<T>, Self::Error> {
         let num_elem = self.numel();
         let mut vec = vec![T::ZERO; num_elem];
-        self.f_to_kind(T::KIND)?.f_copy_data(&mut vec, num_elem)?;
+        copy_data_as(self, &mut vec, num_elem)?;
         let shape: Vec<usize> = self.size().iter().map(|s| *s as usize).collect();
         Ok(ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), vec)?)
     }

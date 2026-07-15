@@ -39,8 +39,8 @@ impl Iter2 {
     /// * `ys` - the targets that the model attempts to predict.
     /// * `batch_size` - the size of batches to be returned.
     pub fn f_new(xs: &Tensor, ys: &Tensor, batch_size: i64) -> Result<Iter2, TchError> {
-        let total_size = xs.size()[0];
-        if ys.size()[0] != total_size {
+        let total_size = xs.size_at(0);
+        if ys.size_at(0) != total_size {
             return Err(TchError::Shape(format!(
                 "different dimension for the two inputs {xs:?} {ys:?}"
             )));
@@ -216,7 +216,7 @@ impl TextData {
     /// Returns a batch iterator over the dataset.
     /// Each sample is made of seq_len characters.
     pub fn iter_shuffle(&self, seq_len: i64, batch_size: i64) -> TextDataIter {
-        let indexes_len = self.data.size()[0] - seq_len + 1;
+        let indexes_len = self.data.size_at(0) - seq_len + 1;
         TextDataIter {
             data: self.data.shallow_clone(),
             seq_len,

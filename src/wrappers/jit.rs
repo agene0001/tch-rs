@@ -1,5 +1,5 @@
 //! JIT interface to run model trained/saved using PyTorch Python API.
-use super::utils::{path_to_cstring, ptr_to_string};
+use super::utils::path_to_cstring;
 use super::{device::Device, kind::Kind};
 use crate::{nn::Path, TchError, Tensor};
 use libc::{c_int, c_void};
@@ -306,8 +306,9 @@ impl IValue {
                 ati_tensor_list(v.as_ptr(), v.len() as c_int)
             }
             IValue::String(string) => {
-                let c_str = std::ffi::CString::new(string.as_str())?;
-                ati_string(c_str.as_ptr())
+                // Pass ptr+len directly: no CString copy, and strings with
+                // embedded NUL bytes round-trip as TorchScript allows.
+                ati_string_len(string.as_ptr() as *const libc::c_char, string.len() as c_int)
             }
             IValue::StringList(strings) => {
                 let mut v = vec![];
@@ -397,10 +398,17 @@ impl IValue {
                 IValue::BoolList(c_array.iter().map(|&x| x != 0).collect())
             }
             9 => {
-                let ptr = unsafe_torch_err!(ati_to_string(c_ivalue));
-                let string = match unsafe { ptr_to_string(ptr) } {
-                    None => return Err(TchError::Kind("nullptr representation".to_string())),
-                    Some(s) => s,
+                // Length-returning getter so embedded NUL bytes survive.
+                let mut len: c_int = 0;
+                let ptr = unsafe_torch_err!(ati_to_string_len(c_ivalue, &mut len));
+                if ptr.is_null() {
+                    return Err(TchError::Kind("nullptr representation".to_string()));
+                }
+                let string = unsafe {
+                    let bytes = std::slice::from_raw_parts(ptr as *const u8, len as usize);
+                    let s = String::from_utf8_lossy(bytes).into_owned();
+                    libc::free(ptr as *mut libc::c_void);
+                    s
                 };
                 IValue::String(string)
             }
@@ -899,6 +907,7 @@ mod tests {
         round_trip(15);
         round_trip("".to_string());
         round_trip("foobar".to_string());
+        round_trip("with\0embedded\0nuls".to_string());
         round_trip((42, consts::PI));
         round_trip(vec![42, 1337]);
         round_trip(vec![consts::E, consts::PI, 299792458.00001]);

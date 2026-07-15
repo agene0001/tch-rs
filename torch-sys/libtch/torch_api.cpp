@@ -1149,6 +1149,14 @@ ivalue ati_string(char *s) {
   return nullptr;
 }
 
+// Takes an explicit length so Rust &str data can be passed without a
+// CString copy, and so strings containing NUL bytes round-trip like
+// TorchScript allows.
+ivalue ati_string_len(char *s, int len) {
+  PROTECT(string str(s, len); return new torch::jit::IValue(str);)
+  return nullptr;
+}
+
 ivalue ati_none() {
   PROTECT(return new torch::jit::IValue();)
   return nullptr;
@@ -1279,6 +1287,18 @@ int ati_to_bool(ivalue i) {
 
 char *ati_to_string(ivalue i) {
   PROTECT(auto str = i->toStringRef(); return strdup(str.c_str());)
+  return nullptr;
+}
+
+// Length-returning variant so strings with embedded NUL bytes survive the
+// round trip (strdup in ati_to_string truncates at the first NUL).
+char *ati_to_string_len(ivalue i, int *len_out) {
+  PROTECT(auto str = i->toStringRef();
+          *len_out = str.size();
+          char *buf = (char*)malloc(str.size() + 1);
+          memcpy(buf, str.data(), str.size());
+          buf[str.size()] = 0;
+          return buf;)
   return nullptr;
 }
 

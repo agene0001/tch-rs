@@ -1027,3 +1027,18 @@ fn relu6_single_kernel_matches_reference() {
         Vec::<f32>::try_from(reference).unwrap()
     );
 }
+
+#[test]
+fn load_rejects_shape_mismatch() {
+    // PyTorch's load_state_dict errors on shape mismatch; f_copy_ used to
+    // silently broadcast the checkpoint tensor into the variable.
+    let filename = std::env::temp_dir().join(format!("tch-load-shape-{}", std::process::id()));
+    let vs1 = nn::VarStore::new(Device::Cpu);
+    let _w1 = vs1.root().var("w", &[1, 4], nn::Init::Const(1.0));
+    vs1.save(&filename).unwrap();
+
+    let mut vs2 = nn::VarStore::new(Device::Cpu);
+    let _w2 = vs2.root().var("w", &[3, 4], nn::Init::Const(0.));
+    assert!(vs2.load(&filename).is_err(), "a [1, 4] tensor must not broadcast into [3, 4]");
+    let _ = std::fs::remove_file(&filename);
+}

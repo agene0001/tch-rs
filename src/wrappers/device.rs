@@ -17,12 +17,21 @@ pub enum Device {
 pub enum Cuda {}
 impl Cuda {
     /// Returns the number of CUDA devices available.
+    ///
+    /// The result is cached after the first call: device availability cannot
+    /// change once the CUDA runtime has initialized, and callers tend to poll
+    /// this in per-step code.
     pub fn device_count() -> i64 {
-        let res = unsafe_torch!(torch_sys::cuda::atc_cuda_device_count());
-        i64::from(res)
+        static DEVICE_COUNT: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+        *DEVICE_COUNT.get_or_init(|| {
+            let res = unsafe_torch!(torch_sys::cuda::atc_cuda_device_count());
+            i64::from(res)
+        })
     }
 
     /// Returns true if at least one CUDA device is available.
+    ///
+    /// The result is cached after the first call — see [`Cuda::device_count`].
     pub fn is_available() -> bool {
         // Deterministic complement to the `#[used]` static in tensor/mod.rs:
         // referencing the stub from a function callers actually invoke
@@ -31,7 +40,9 @@ impl Cuda {
         // unreferenced object file.
         #[cfg(all(target_os = "windows", use_cuda))]
         std::hint::black_box(torch_sys::dummy_cuda_dependency as usize);
-        unsafe_torch!(torch_sys::cuda::atc_cuda_is_available()) != 0
+        static IS_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *IS_AVAILABLE
+            .get_or_init(|| unsafe_torch!(torch_sys::cuda::atc_cuda_is_available()) != 0)
     }
 
     /// Returns true if CUDA is available, and CuDNN is available.

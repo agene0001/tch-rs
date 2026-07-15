@@ -200,6 +200,16 @@ impl VarStore {
     /// fp16 weights); otherwise the values are cast into the destination's
     /// dtype, matching PyTorch's `load_state_dict` (`param.copy_`).
     fn copy_data(src: &Tensor, dst: &mut Tensor, update_precision: bool) -> Result<(), TchError> {
+        // PyTorch's load_state_dict raises on shape mismatch; f_copy_ would
+        // silently broadcast (e.g. a [1, n] checkpoint tensor into an [m, n]
+        // variable), which is never what a checkpoint load intends.
+        if src.size() != dst.size() {
+            return Err(TchError::Shape(format!(
+                "size mismatch: checkpoint tensor has shape {:?}, variable has shape {:?}",
+                src.size(),
+                dst.size()
+            )));
+        }
         // Only re-tag when the checkpoint dtype actually differs: `to_kind`
         // materializes a fresh tensor and `set_data` swaps it in, so doing
         // this unconditionally allocated + copied every variable on the

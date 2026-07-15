@@ -241,6 +241,7 @@ extern "C" {
     pub fn ati_double(v: f64) -> *mut CIValue;
     pub fn ati_tensor(v: *mut C_tensor) -> *mut CIValue;
     pub fn ati_string(s: *const c_char) -> *mut CIValue;
+    pub fn ati_string_len(s: *const c_char, len: c_int) -> *mut CIValue;
     pub fn ati_tuple(v: *const *mut CIValue, n: c_int) -> *mut CIValue;
     pub fn ati_generic_list(v: *const *mut CIValue, n: c_int) -> *mut CIValue;
     pub fn ati_generic_dict(v: *const *mut CIValue, n: c_int) -> *mut CIValue;
@@ -270,6 +271,7 @@ extern "C" {
     pub fn ati_to_bool_list(arg: *mut CIValue, outputs: *mut c_char, n: c_int);
     pub fn ati_to_tensor_list(arg: *mut CIValue, outputs: *mut *mut C_tensor, n: c_int);
     pub fn ati_to_string(arg: *mut CIValue) -> *mut c_char;
+    pub fn ati_to_string_len(arg: *mut CIValue, len_out: *mut c_int) -> *mut c_char;
 
     pub fn ati_clone(arg: *mut CIValue) -> *mut CIValue;
     pub fn ati_free(arg: *mut CIValue);
