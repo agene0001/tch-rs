@@ -183,15 +183,55 @@ int at_autocast_increment_nesting() {
   return -1;
 }
 
+// Autocast device-type codes shared with the Rust side:
+// 0 = cpu, 1 = cuda, 2 = mps.
+static at::DeviceType autocast_device_type_of_int(int v) {
+  switch (v) {
+    case 0: return at::kCPU;
+    case 1: return at::kCUDA;
+    case 2: return at::kMPS;
+  }
+  throw std::invalid_argument("unsupported autocast device type");
+}
+
+// The zero-argument at::autocast::is_enabled/set_enabled entry points are
+// deprecated since PyTorch 2.4; these legacy wrappers keep their CUDA
+// semantics through the device-typed API.
 bool at_autocast_is_enabled() {
-  PROTECT(return at::autocast::is_enabled();)
+  PROTECT(return at::autocast::is_autocast_enabled(at::kCUDA);)
   return -1;
 }
 
 bool at_autocast_set_enabled(bool b) {
-  PROTECT(bool is_enabled = at::autocast::is_enabled();
-          at::autocast::set_enabled(b); return is_enabled;)
+  PROTECT(bool is_enabled = at::autocast::is_autocast_enabled(at::kCUDA);
+          at::autocast::set_autocast_enabled(at::kCUDA, b); return is_enabled;)
   return -1;
+}
+
+int at_autocast_is_enabled_for(int device_type) {
+  PROTECT(return at::autocast::is_autocast_enabled(
+      autocast_device_type_of_int(device_type));)
+  return -1;
+}
+
+// Returns the previous enabled state.
+int at_autocast_set_enabled_for(int device_type, int b) {
+  PROTECT(auto dt = autocast_device_type_of_int(device_type);
+          bool is_enabled = at::autocast::is_autocast_enabled(dt);
+          at::autocast::set_autocast_enabled(dt, (bool)b);
+          return is_enabled;)
+  return -1;
+}
+
+int at_autocast_get_dtype(int device_type) {
+  PROTECT(return (int)at::autocast::get_autocast_dtype(
+      autocast_device_type_of_int(device_type));)
+  return -1;
+}
+
+void at_autocast_set_dtype(int device_type, int dtype) {
+  PROTECT(at::autocast::set_autocast_dtype(
+      autocast_device_type_of_int(device_type), at::ScalarType(dtype));)
 }
 
 int at_device(tensor t) {

@@ -77,6 +77,11 @@ extern "C" {
     pub fn at_autocast_increment_nesting() -> c_int;
     pub fn at_autocast_is_enabled() -> c_int;
     pub fn at_autocast_set_enabled(b: c_int) -> c_int;
+    // device_type: 0 = cpu, 1 = cuda, 2 = mps.
+    pub fn at_autocast_is_enabled_for(device_type: c_int) -> c_int;
+    pub fn at_autocast_set_enabled_for(device_type: c_int, b: c_int) -> c_int;
+    pub fn at_autocast_get_dtype(device_type: c_int) -> c_int;
+    pub fn at_autocast_set_dtype(device_type: c_int, dtype: c_int);
     pub fn at_device(arg: *mut C_tensor) -> c_int;
     pub fn at_tensor_of_data(
         vs: *const c_void,

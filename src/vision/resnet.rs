@@ -5,7 +5,15 @@
 use crate::{nn, nn::Conv2D, nn::FuncT, nn::ModuleT};
 
 fn conv2d(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, padding: i64, stride: i64) -> Conv2D {
-    let conv2d_cfg = nn::ConvConfig { stride, padding, bias: false, ..Default::default() };
+    // torchvision initializes every ResNet conv with
+    // kaiming_normal_(mode="fan_out", nonlinearity="relu"); this only affects
+    // from-scratch training (pretrained loads overwrite it).
+    let ws_init = nn::Init::Kaiming {
+        dist: nn::init::NormalOrUniform::Normal,
+        fan: nn::init::FanInOut::FanOut,
+        non_linearity: nn::init::NonLinearity::ReLU,
+    };
+    let conv2d_cfg = nn::ConvConfig { stride, padding, bias: false, ws_init, ..Default::default() };
     nn::conv2d(p, c_in, c_out, ksize, conv2d_cfg)
 }
 
@@ -178,6 +186,11 @@ pub fn resnet152(p: &nn::Path, num_classes: i64) -> impl ModuleT {
     bottleneck_resnet(p, Some(num_classes), 3, 8, 36, 3)
 }
 
+pub fn resnet152_no_final_layer(p: &nn::Path) -> impl ModuleT {
+    bottleneck_resnet(p, None, 3, 8, 36, 3)
+}
+
+#[deprecated(note = "this builds a ResNet-152; use resnet152_no_final_layer")]
 pub fn resnet150_no_final_layer(p: &nn::Path) -> impl ModuleT {
     bottleneck_resnet(p, None, 3, 8, 36, 3)
 }

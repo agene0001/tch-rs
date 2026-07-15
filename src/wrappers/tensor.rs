@@ -1,7 +1,7 @@
 use super::stream::ReadSeekAdapter;
 use super::utils::{path_to_cstring, ptr_to_string};
 use super::{
-    device::{Cuda, Device},
+    device::Device,
     kind,
     kind::Kind,
 };
@@ -811,36 +811,77 @@ fn autocast_increment_nesting() -> isize {
     unsafe_torch!(at_autocast_increment_nesting() as isize)
 }
 
-fn autocast_is_enabled() -> bool {
-    unsafe_torch!(at_autocast_is_enabled() != 0)
+// Autocast device-type codes shared with the C shims.
+fn autocast_device_type_c(device: Device) -> libc::c_int {
+    match device {
+        Device::Cpu => 0,
+        Device::Cuda(_) => 1,
+        Device::Mps => 2,
+        Device::Vulkan => panic!("autocast is not supported on vulkan devices"),
+    }
 }
 
-fn autocast_set_enabled(b: bool) -> bool {
-    unsafe_torch!(at_autocast_set_enabled(i32::from(b)) != 0)
+fn autocast_is_enabled_for(device_type: libc::c_int) -> bool {
+    unsafe_torch!(at_autocast_is_enabled_for(device_type)) != 0
 }
 
-/// Runs a closure in mixed precision.
+fn autocast_set_enabled_for(device_type: libc::c_int, b: bool) -> bool {
+    unsafe_torch!(at_autocast_set_enabled_for(device_type, i32::from(b))) != 0
+}
+
+fn autocast_get_dtype(device_type: libc::c_int) -> crate::Kind {
+    let kind = unsafe_torch!(at_autocast_get_dtype(device_type));
+    crate::Kind::from_c_int(kind).expect("unexpected autocast dtype")
+}
+
+fn autocast_set_dtype(device_type: libc::c_int, kind: crate::Kind) {
+    unsafe_torch!(at_autocast_set_dtype(device_type, kind.c_int()))
+}
+
+/// Runs a closure in mixed precision on the given device type, mirroring
+/// `torch.autocast(device_type=..., dtype=..., enabled=...)`.
+///
+/// Only the device *type* matters (all CUDA devices share the autocast
+/// state). `dtype` of `None` uses the device type's current autocast dtype —
+/// by default fp16 on CUDA/MPS and bf16 on CPU. The previous autocast state
+/// is restored when the closure finishes, including on panic.
+pub fn autocast_device<T, F>(device: Device, dtype: Option<crate::Kind>, enabled: bool, f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    struct Guard {
+        device_type: libc::c_int,
+        prev_enabled: bool,
+        prev_dtype: crate::Kind,
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if autocast_decrement_nesting() == 0 {
+                autocast_clear_cache();
+            }
+            autocast_set_enabled_for(self.device_type, self.prev_enabled);
+            autocast_set_dtype(self.device_type, self.prev_dtype);
+        }
+    }
+
+    let device_type = autocast_device_type_c(device);
+    let prev_enabled = autocast_is_enabled_for(device_type);
+    let prev_dtype = autocast_get_dtype(device_type);
+    autocast_set_enabled_for(device_type, enabled);
+    autocast_set_dtype(device_type, dtype.unwrap_or(prev_dtype));
+    autocast_increment_nesting();
+    let _guard = Guard { device_type, prev_enabled, prev_dtype };
+    f()
+}
+
+/// Runs a closure in mixed precision, targeting the CUDA autocast state
+/// (`torch.autocast("cuda")`). Use [`autocast_device`] for CPU or MPS
+/// autocasting or to pick an explicit dtype.
 pub fn autocast<T, F>(enabled: bool, f: F) -> T
 where
     F: FnOnce() -> T,
 {
-    if !Cuda::is_available() {
-        return f();
-    }
-
-    // Check whether we are using CUDA.
-    let prev = autocast_is_enabled();
-    autocast_set_enabled(enabled);
-    autocast_increment_nesting();
-
-    let result = f();
-
-    if autocast_decrement_nesting() == 0 {
-        autocast_clear_cache();
-    }
-    autocast_set_enabled(prev);
-
-    result
+    autocast_device(Device::Cuda(0), None, enabled, f)
 }
 
 fn grad_set_enabled(b: bool) -> bool {

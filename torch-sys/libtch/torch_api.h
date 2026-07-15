@@ -65,6 +65,11 @@ int at_autocast_decrement_nesting();
 int at_autocast_increment_nesting();
 bool at_autocast_is_enabled();
 bool at_autocast_set_enabled(bool b);
+// device_type: 0 = cpu, 1 = cuda, 2 = mps.
+int at_autocast_is_enabled_for(int device_type);
+int at_autocast_set_enabled_for(int device_type, int b);
+int at_autocast_get_dtype(int device_type);
+void at_autocast_set_dtype(int device_type, int dtype);
 
 void at_backward(tensor, int, int);
 int at_requires_grad(tensor);

@@ -1,8 +1,30 @@
 //! InceptionV3.
 use crate::{nn, nn::ModuleT, Tensor};
 
-fn conv_bn(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, pad: i64, stride: i64) -> impl ModuleT {
-    let conv2d_cfg = nn::ConvConfig { stride, padding: pad, bias: false, ..Default::default() };
+// torchvision initializes every Inception conv/linear weight with
+// trunc_normal_(mean=0, std=<module stddev, default 0.1>, a=-2, b=2); the aux
+// branch overrides the std on two of its modules. Only affects from-scratch
+// training (pretrained loads overwrite the weights).
+fn trunc_normal(stdev: f64) -> nn::Init {
+    nn::Init::TruncatedNormal { mean: 0., stdev, lo: -2., up: 2. }
+}
+
+fn conv_bn_std(
+    p: nn::Path,
+    c_in: i64,
+    c_out: i64,
+    ksize: i64,
+    pad: i64,
+    stride: i64,
+    stddev: f64,
+) -> impl ModuleT {
+    let conv2d_cfg = nn::ConvConfig {
+        stride,
+        padding: pad,
+        bias: false,
+        ws_init: trunc_normal(stddev),
+        ..Default::default()
+    };
     let bn_cfg = nn::BatchNormConfig { eps: 0.001, ..Default::default() };
     nn::seq_t()
         .add(nn::conv2d(&p / "conv", c_in, c_out, ksize, conv2d_cfg))
@@ -10,9 +32,17 @@ fn conv_bn(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, pad: i64, stride: i64
         .add_fn(|xs| xs.relu())
 }
 
+fn conv_bn(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, pad: i64, stride: i64) -> impl ModuleT {
+    conv_bn_std(p, c_in, c_out, ksize, pad, stride, 0.1)
+}
+
 fn conv_bn2(p: nn::Path, c_in: i64, c_out: i64, ksize: [i64; 2], pad: [i64; 2]) -> impl ModuleT {
-    let conv2d_cfg =
-        nn::ConvConfigND::<[i64; 2]> { padding: pad, bias: false, ..Default::default() };
+    let conv2d_cfg = nn::ConvConfigND::<[i64; 2]> {
+        padding: pad,
+        bias: false,
+        ws_init: trunc_normal(0.1),
+        ..Default::default()
+    };
     let bn_cfg = nn::BatchNormConfig { eps: 0.001, ..Default::default() };
     nn::seq_t()
         .add(nn::conv(&p / "conv", c_in, c_out, ksize, conv2d_cfg))
@@ -144,22 +174,92 @@ fn transform_input(xs: &Tensor) -> Tensor {
     xs * scale + shift
 }
 
-/// InceptionV3 with input transformation, matching torchvision's pretrained
-/// `inception_v3` (which sets `transform_input=True`). Use this when loading
-/// weights converted from torchvision together with ImageNet normalization.
-pub fn v3(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    v3_impl(p, nclasses, true)
+/// The auxiliary classifier hanging off the middle of the network
+/// (torchvision's `InceptionAux`), used during training as
+/// `loss = main_loss + 0.4 * aux_loss`.
+fn inception_aux(p: nn::Path, nclasses: i64) -> nn::SequentialT {
+    let fc_cfg = nn::LinearConfig { ws_init: trunc_normal(0.001), ..Default::default() };
+    nn::seq_t()
+        // F.avg_pool2d(x, kernel_size=5, stride=3)
+        .add_fn(|xs| xs.avg_pool2d([5, 5], [3, 3], [0, 0], false, true, 25))
+        .add(conv_bn(&p / "conv0", 768, 128, 1, 0, 1))
+        .add(conv_bn_std(&p / "conv1", 128, 768, 5, 0, 1, 0.01))
+        .add_fn(|xs| xs.adaptive_avg_pool2d([1, 1]).flat_view())
+        .add(nn::linear(&p / "fc", 768, nclasses, fc_cfg))
+}
+
+/// InceptionV3 configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct InceptionV3Config {
+    /// Remap ImageNet-normalized inputs to the TF (-1, 1) convention before
+    /// the first conv. torchvision's pretrained builder enables this.
+    pub transform_input: bool,
+    /// Build the auxiliary classifier branch. Matches torchvision's default;
+    /// the standard pretrained checkpoint contains its weights.
+    pub aux_logits: bool,
+}
+
+impl Default for InceptionV3Config {
+    fn default() -> Self {
+        InceptionV3Config { transform_input: true, aux_logits: true }
+    }
+}
+
+/// An InceptionV3 model.
+///
+/// `ModuleT` runs the main tower only; use
+/// [`InceptionV3::forward_t_with_aux`] to also get the auxiliary logits when
+/// training with the torchvision recipe (`loss = main + 0.4 * aux`).
+#[derive(Debug)]
+pub struct InceptionV3 {
+    transform_input: bool,
+    /// Stem through Mixed_6e, where the aux branch taps in.
+    pre_aux: nn::SequentialT,
+    /// Mixed_7a through the final linear layer.
+    post_aux: nn::SequentialT,
+    aux: Option<nn::SequentialT>,
+}
+
+impl InceptionV3 {
+    /// Runs the forward pass, also returning the auxiliary logits when the
+    /// model was built with `aux_logits` and `train` is set — mirroring
+    /// torchvision, which only computes the branch in training mode.
+    pub fn forward_t_with_aux(&self, xs: &Tensor, train: bool) -> (Tensor, Option<Tensor>) {
+        let xs = if self.transform_input { transform_input(xs) } else { xs.shallow_clone() };
+        let mid = xs.apply_t(&self.pre_aux, train);
+        let aux = match (&self.aux, train) {
+            (Some(aux), true) => Some(mid.apply_t(aux, train)),
+            _ => None,
+        };
+        (mid.apply_t(&self.post_aux, train), aux)
+    }
+}
+
+impl ModuleT for InceptionV3 {
+    fn forward_t(&self, xs: &Tensor, train: bool) -> Tensor {
+        let xs = if self.transform_input { transform_input(xs) } else { xs.shallow_clone() };
+        xs.apply_t(&self.pre_aux, train).apply_t(&self.post_aux, train)
+    }
+}
+
+/// InceptionV3 matching torchvision's pretrained `inception_v3`
+/// (`transform_input=True`, `aux_logits=True`). Use this when loading weights
+/// converted from torchvision together with ImageNet normalization.
+pub fn v3(p: &nn::Path, nclasses: i64) -> InceptionV3 {
+    v3_with(p, nclasses, Default::default())
 }
 
 /// InceptionV3 without input transformation, matching torchvision's
-/// from-scratch `Inception3()` constructor (`transform_input=False`).
-pub fn v3_no_transform_input(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    v3_impl(p, nclasses, false)
+/// from-scratch `Inception3()` constructor (`transform_input=False`,
+/// `aux_logits=True`).
+pub fn v3_no_transform_input(p: &nn::Path, nclasses: i64) -> InceptionV3 {
+    v3_with(p, nclasses, InceptionV3Config { transform_input: false, aux_logits: true })
 }
 
-fn v3_impl(p: &nn::Path, nclasses: i64, transform: bool) -> impl ModuleT {
-    let seq = if transform { nn::seq_t().add_fn(transform_input) } else { nn::seq_t() };
-    seq.add(conv_bn(p / "Conv2d_1a_3x3", 3, 32, 3, 0, 2))
+/// InceptionV3 with an explicit configuration.
+pub fn v3_with(p: &nn::Path, nclasses: i64, config: InceptionV3Config) -> InceptionV3 {
+    let pre_aux = nn::seq_t()
+        .add(conv_bn(p / "Conv2d_1a_3x3", 3, 32, 3, 0, 2))
         .add(conv_bn(p / "Conv2d_2a_3x3", 32, 32, 3, 0, 1))
         .add(conv_bn(p / "Conv2d_2b_3x3", 32, 64, 3, 1, 1))
         .add_fn(|xs| max_pool2d(xs, 3, 2))
@@ -173,12 +273,22 @@ fn v3_impl(p: &nn::Path, nclasses: i64, transform: bool) -> impl ModuleT {
         .add(inception_c(p / "Mixed_6b", 768, 128))
         .add(inception_c(p / "Mixed_6c", 768, 160))
         .add(inception_c(p / "Mixed_6d", 768, 160))
-        .add(inception_c(p / "Mixed_6e", 768, 192))
+        .add(inception_c(p / "Mixed_6e", 768, 192));
+    let aux = config.aux_logits.then(|| inception_aux(p / "AuxLogits", nclasses));
+    let post_aux = nn::seq_t()
         .add(inception_d(p / "Mixed_7a", 768))
         .add(inception_e(p / "Mixed_7b", 1280))
         .add(inception_e(p / "Mixed_7c", 2048))
         .add_fn_t(|xs, train| xs.adaptive_avg_pool2d([1, 1]).dropout(0.5, train).flat_view())
-        .add(nn::linear(p / "fc", 2048, nclasses, Default::default()))
+        // The init loop covers Linear weights too (default stddev 0.1); the
+        // bias keeps the standard Linear init, as in torchvision.
+        .add(nn::linear(
+            p / "fc",
+            2048,
+            nclasses,
+            nn::LinearConfig { ws_init: trunc_normal(0.1), ..Default::default() },
+        ));
+    InceptionV3 { transform_input: config.transform_input, pre_aux, post_aux, aux }
 }
 
 #[cfg(test)]

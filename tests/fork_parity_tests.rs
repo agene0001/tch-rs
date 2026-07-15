@@ -1042,3 +1042,51 @@ fn load_rejects_shape_mismatch() {
     assert!(vs2.load(&filename).is_err(), "a [1, 4] tensor must not broadcast into [3, 4]");
     let _ = std::fs::remove_file(&filename);
 }
+
+#[test]
+fn truncated_normal_init_matches_pytorch() {
+    // trunc_normal_(mean=0, std=0.1, a=-2, b=2): every draw lies inside the
+    // bounds and the sample std matches the requested one (truncation at
+    // +/-20 sigma is a no-op for the variance).
+    let t = tch::nn::init(
+        nn::Init::TruncatedNormal { mean: 0., stdev: 0.1, lo: -2., up: 2. },
+        &[64, 1024],
+        Device::Cpu,
+    );
+    let max = f64::try_from(t.abs().max()).unwrap();
+    assert!(max <= 2.0, "draw outside truncation bounds: {max}");
+    let std = f64::try_from(t.std(true)).unwrap();
+    assert!((std - 0.1).abs() / 0.1 < 0.05, "std {std} vs expected 0.1");
+
+    // Tight bounds actually truncate: N(0, 1) restricted to [-0.5, 0.5].
+    let t = tch::nn::init(
+        nn::Init::TruncatedNormal { mean: 0., stdev: 1., lo: -0.5, up: 0.5 },
+        &[16, 1024],
+        Device::Cpu,
+    );
+    let max = f64::try_from(t.abs().max()).unwrap();
+    assert!(max <= 0.5, "draw outside truncation bounds: {max}");
+}
+
+#[test]
+fn inception_aux_logits() {
+    use tch::vision::inception;
+    let vs = nn::VarStore::new(Device::Cpu);
+    let net = inception::v3(&vs.root(), 10);
+
+    // The aux branch registers torchvision-named variables.
+    let variables = vs.variables();
+    assert!(variables.contains_key("AuxLogits.conv0.conv.weight"));
+    assert!(variables.contains_key("AuxLogits.conv1.conv.weight"));
+    assert!(variables.contains_key("AuxLogits.fc.weight"));
+
+    let xs = Tensor::zeros([1, 3, 299, 299], (Kind::Float, Device::Cpu));
+    // Training mode returns both towers; eval mode skips the aux branch,
+    // mirroring torchvision.
+    let (main, aux) = net.forward_t_with_aux(&xs, true);
+    assert_eq!(main.size(), vec![1, 10]);
+    assert_eq!(aux.expect("aux logits in training mode").size(), vec![1, 10]);
+    let (main, aux) = net.forward_t_with_aux(&xs, false);
+    assert_eq!(main.size(), vec![1, 10]);
+    assert!(aux.is_none());
+}

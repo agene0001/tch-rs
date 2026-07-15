@@ -6,11 +6,27 @@ fn max_pool2d(xs: &Tensor) -> Tensor {
     xs.max_pool2d([3, 3], [2, 2], [0, 0], [1, 1], true)
 }
 
+// torchvision's from-scratch init: plain kaiming_uniform_ (gain sqrt(2),
+// wider than tch's a=sqrt(5) default) for every conv except the final
+// classifier, and all conv biases zeroed. Pretrained loads overwrite this.
+fn conv_cfg(padding: i64, stride: i64) -> nn::ConvConfig {
+    nn::ConvConfig {
+        padding,
+        stride,
+        ws_init: nn::Init::Kaiming {
+            dist: nn::init::NormalOrUniform::Uniform,
+            fan: nn::init::FanInOut::FanIn,
+            non_linearity: nn::init::NonLinearity::ReLU,
+        },
+        bs_init: Some(nn::Init::Const(0.)),
+        ..Default::default()
+    }
+}
+
 fn fire(p: nn::Path, c_in: i64, c_squeeze: i64, c_exp1: i64, c_exp3: i64) -> impl Module {
-    let cfg3 = nn::ConvConfig { padding: 1, ..Default::default() };
-    let squeeze = nn::conv2d(&p / "squeeze", c_in, c_squeeze, 1, Default::default());
-    let exp1 = nn::conv2d(&p / "expand1x1", c_squeeze, c_exp1, 1, Default::default());
-    let exp3 = nn::conv2d(&p / "expand3x3", c_squeeze, c_exp3, 3, cfg3);
+    let squeeze = nn::conv2d(&p / "squeeze", c_in, c_squeeze, 1, conv_cfg(0, 1));
+    let exp1 = nn::conv2d(&p / "expand1x1", c_squeeze, c_exp1, 1, conv_cfg(0, 1));
+    let exp3 = nn::conv2d(&p / "expand3x3", c_squeeze, c_exp3, 3, conv_cfg(1, 1));
     nn::func(move |xs| {
         let xs = xs.apply(&squeeze).relu();
         Tensor::cat(&[xs.apply(&exp1).relu(), xs.apply(&exp3).relu()], 1)
@@ -20,8 +36,13 @@ fn fire(p: nn::Path, c_in: i64, c_squeeze: i64, c_exp1: i64, c_exp3: i64) -> imp
 fn squeezenet(p: &nn::Path, v1_0: bool, nclasses: i64) -> impl ModuleT {
     let f_p = p / "features";
     let c_p = p / "classifier";
-    let initial_conv_cfg = nn::ConvConfig { stride: 2, ..Default::default() };
-    let final_conv_cfg = nn::ConvConfig { stride: 1, ..Default::default() };
+    let initial_conv_cfg = conv_cfg(0, 2);
+    // torchvision initializes the final classifier conv with normal(0, 0.01).
+    let final_conv_cfg = nn::ConvConfig {
+        ws_init: nn::Init::Randn { mean: 0., stdev: 0.01 },
+        bs_init: Some(nn::Init::Const(0.)),
+        ..Default::default()
+    };
     let features = if v1_0 {
         nn::seq_t()
             .add(nn::conv2d(&f_p / "0", 3, 96, 7, initial_conv_cfg))

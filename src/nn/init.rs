@@ -89,6 +89,11 @@ pub enum Init {
     /// He, K. et al. (2015). This uses a uniform distribution.
     Kaiming { dist: NormalOrUniform, fan: FanInOut, non_linearity: NonLinearity },
 
+    /// Normal distribution truncated to `[lo, up]`, matching PyTorch's
+    /// `nn.init.trunc_normal_(mean, std, a, b)` (values are re-drawn inside
+    /// the bounds via the inverse CDF, not clipped after the fact).
+    TruncatedNormal { mean: f64, stdev: f64, lo: f64, up: f64 },
+
     /// Orthogonal initialization
     Orthogonal { gain: f64 },
 }
@@ -108,6 +113,31 @@ pub const DEFAULT_KAIMING_NORMAL: Init = Init::Kaiming {
     fan: FanInOut::FanIn,
     non_linearity: NonLinearity::ReLU,
 };
+
+/// In-place truncated normal, following PyTorch's `_no_grad_trunc_normal_`:
+/// draw uniformly in CDF space between the bounds, then map back through the
+/// inverse error function. One RNG draw, exactly like PyTorch.
+fn f_trunc_normal_(
+    tensor: &mut Tensor,
+    mean: f64,
+    stdev: f64,
+    lo: f64,
+    up: f64,
+) -> Result<(), TchError> {
+    let norm_cdf = |x: f64| -> Result<f64, TchError> {
+        // std lacks erf; a one-element tensor op keeps the value exact.
+        let erf = Tensor::f_from_slice(&[x / std::f64::consts::SQRT_2])?.f_erf()?;
+        Ok((1. + f64::try_from(erf)?) / 2.)
+    };
+    let l = norm_cdf((lo - mean) / stdev)?;
+    let u = norm_cdf((up - mean) / stdev)?;
+    let _ = tensor.f_uniform_(2. * l - 1., 2. * u - 1.)?;
+    let _ = tensor.f_erfinv_()?;
+    let _ = tensor.f_mul_scalar_(stdev * std::f64::consts::SQRT_2)?;
+    let _ = tensor.f_add_scalar_(mean)?;
+    let _ = tensor.f_clamp_(lo, up)?;
+    Ok(())
+}
 
 /// Creates a new float tensor with the specified shape, device, and initialization.
 pub fn f_init(i: Init, dims: &[i64], device: Device, kind: Kind) -> Result<Tensor, TchError> {
@@ -143,6 +173,11 @@ pub fn f_init(i: Init, dims: &[i64], device: Device, kind: Kind) -> Result<Tenso
                     Tensor::f_empty(dims, (kind, device))?.f_normal_(0., std)
                 }
             }
+        }
+        Init::TruncatedNormal { mean, stdev, lo, up } => {
+            let mut t = Tensor::f_empty(dims, (kind, device))?;
+            f_trunc_normal_(&mut t, mean, stdev, lo, up)?;
+            Ok(t)
         }
         Init::Orthogonal { gain } => {
             if dims.len() < 2 {
@@ -204,6 +239,9 @@ impl Init {
             }
             Init::Randn { mean, stdev } => {
                 let _ = tensor.normal_(mean, stdev);
+            }
+            Init::TruncatedNormal { mean, stdev, lo, up } => {
+                f_trunc_normal_(tensor, mean, stdev, lo, up).unwrap();
             }
             Init::Orthogonal { gain } => {
                 let q =
