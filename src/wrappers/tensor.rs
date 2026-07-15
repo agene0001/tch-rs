@@ -792,7 +792,10 @@ impl Default for Tensor {
 
 impl Drop for Tensor {
     fn drop(&mut self) {
-        unsafe_torch!(at_free(self.c_tensor))
+        // at_free is a plain `delete` and never sets the error TLS; checking it
+        // would cost an extra FFI crossing per drop and could panic in Drop on
+        // an error left pending by an unrelated call.
+        unsafe { at_free(self.c_tensor) }
     }
 }
 

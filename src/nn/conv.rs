@@ -121,6 +121,11 @@ pub fn conv<'a, ND: std::convert::AsRef<[i64]>, T: Borrow<super::Path<'a>>>(
     config: ConvConfigND<ND>,
 ) -> Conv<ND> {
     let vs = vs.borrow();
+    // Sample the weight before the bias — PyTorch's `reset_parameters` draws
+    // in that order, so matching it keeps seeded initializations bit-exact.
+    let mut weight_size = vec![out_dim, in_dim / config.groups];
+    weight_size.extend(ksizes.as_ref().iter());
+    let ws = vs.var("weight", weight_size.as_slice(), config.ws_init);
     let bs = if config.bias {
         let bs_init = config.bs_init.unwrap_or_else(|| {
             let fan_in = (in_dim / config.groups) * ksizes.as_ref().iter().product::<i64>();
@@ -131,9 +136,6 @@ pub fn conv<'a, ND: std::convert::AsRef<[i64]>, T: Borrow<super::Path<'a>>>(
     } else {
         None
     };
-    let mut weight_size = vec![out_dim, in_dim / config.groups];
-    weight_size.extend(ksizes.as_ref().iter());
-    let ws = vs.var("weight", weight_size.as_slice(), config.ws_init);
     let mut reversed_padding_repeated_twice = vec![];
     for &v in config.padding.as_ref().iter().rev() {
         reversed_padding_repeated_twice.push(v)

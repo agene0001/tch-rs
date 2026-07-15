@@ -65,6 +65,11 @@ fn conv_transpose<'a, ND: std::convert::AsRef<[i64]>, T: Borrow<super::Path<'a>>
     config: ConvTransposeConfigND<ND>,
 ) -> ConvTransposeND<ND> {
     let vs = vs.borrow();
+    // Sample the weight before the bias — PyTorch's `reset_parameters` draws
+    // in that order, so matching it keeps seeded initializations bit-exact.
+    let mut weight_size = vec![in_dim, out_dim / config.groups];
+    weight_size.extend(ksizes.as_ref().iter());
+    let ws = vs.var("weight", weight_size.as_slice(), config.ws_init);
     let bs = if config.bias {
         let bs_init = config.bs_init.unwrap_or_else(|| {
             let fan_in = (out_dim / config.groups) * ksizes.as_ref().iter().product::<i64>();
@@ -75,9 +80,6 @@ fn conv_transpose<'a, ND: std::convert::AsRef<[i64]>, T: Borrow<super::Path<'a>>
     } else {
         None
     };
-    let mut weight_size = vec![in_dim, out_dim / config.groups];
-    weight_size.extend(ksizes.as_ref().iter());
-    let ws = vs.var("weight", weight_size.as_slice(), config.ws_init);
     ConvTransposeND { ws, bs, config }
 }
 

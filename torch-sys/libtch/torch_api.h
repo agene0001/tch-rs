@@ -20,6 +20,17 @@ typedef torch::jit::IValue *ivalue;
   } catch (const exception& e) { \
       torch_last_err = strdup(e.what()); \
   }
+// Used by the generated bindings: instead of stashing the error in a
+// thread-local that the Rust side must poll with a second FFI call after
+// every op, the wrapper returns nullptr on success and the strdup'ed error
+// message on failure (ownership passes to the caller, freed with free()).
+#define PROTECT_ERR(x) \
+  try { \
+    x \
+    return nullptr; \
+  } catch (const exception& e) { \
+      return strdup(e.what()); \
+  }
 #else
 typedef void *tensor;
 typedef void *optimizer;
@@ -252,6 +263,7 @@ int64_t ati_to_int(ivalue);
 double ati_to_double(ivalue);
 char *ati_to_string(ivalue);
 int ati_to_bool(ivalue);
+int ati_to_device(ivalue);
 int ati_length(ivalue);
 int ati_tuple_length(ivalue);
 void ati_to_tuple(ivalue, ivalue *, int);

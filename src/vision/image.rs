@@ -81,6 +81,45 @@ pub fn resize_preserve_aspect_ratio_hwc(
     }
 }
 
+/// Resizes so the shorter side equals `size`, preserving the aspect ratio
+/// without cropping — torchvision's `Resize(size)` with an integer size
+/// (the longer side becomes `int(size * long / short)`).
+///
+/// The input is laid out as [height, width, channel]; the result is
+/// [channel, new_h, new_w].
+pub(crate) fn resize_short_side_hwc(t: &Tensor, size: i64) -> Result<Tensor, TchError> {
+    let tensor_size = t.size();
+    let (h, w) = (tensor_size[0], tensor_size[1]);
+    let (new_w, new_h) = if h <= w {
+        ((size as f64 * w as f64 / h as f64) as i64, size)
+    } else {
+        (size, (size as f64 * h as f64 / w as f64) as i64)
+    };
+    Ok(hwc_to_chw(&resize_hwc(t, new_w, new_h)?))
+}
+
+/// Loads an image and resizes it so the shorter side equals `size`, preserving
+/// the aspect ratio without cropping (torchvision `Resize(size)`).
+///
+/// On success returns a tensor of shape [channel, new_h, new_w].
+pub fn load_and_resize_short_side<T: AsRef<Path>>(path: T, size: i64) -> Result<Tensor, TchError> {
+    let tensor = load_hwc(path)?;
+    resize_short_side_hwc(&tensor, size)
+}
+
+/// Loads an image from memory and resizes it so the shorter side equals
+/// `size`, preserving the aspect ratio without cropping (torchvision
+/// `Resize(size)`).
+///
+/// On success returns a tensor of shape [channel, new_h, new_w].
+pub fn load_and_resize_short_side_from_memory(
+    img_data: &[u8],
+    size: i64,
+) -> Result<Tensor, TchError> {
+    let tensor = load_hwc_from_mem(img_data)?;
+    resize_short_side_hwc(&tensor, size)
+}
+
 /// Resize an image, preserve the aspect ratio by taking a center crop.
 ///
 /// This expects as input a tensor of shape [channel, height, width] and returns

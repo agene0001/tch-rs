@@ -340,27 +340,30 @@ impl Tensor {
                     curr_idx, // not advanced because select() squeezes dimension
                 ),
                 Narrow(start, end) => {
-                    if let Some((start, length)) = match (start, end) {
-                        (Unbounded, Unbounded) => None,
-                        (Included(start), Unbounded) => {
-                            let dim_len = tensor.size_at(curr_idx as usize);
-                            Some((*start, dim_len - *start))
-                        }
-                        (Excluded(start), Unbounded) => {
-                            let dim_len = tensor.size_at(curr_idx as usize);
-                            Some((*start + 1, dim_len - *start - 1))
-                        }
-                        (Unbounded, Included(end)) => Some((0, *end + 1)),
-                        (Unbounded, Excluded(end)) => Some((0, *end)),
-                        (Included(start), Included(end)) => Some((*start, *end - *start + 1)),
-                        (Included(start), Excluded(end)) => Some((*start, *end - *start)),
-                        (Excluded(start), Included(end)) => Some((*start + 1, *end - *start)),
-                        (Excluded(start), Excluded(end)) => Some((*start + 1, *end - *start - 1)),
-                    } {
-                        (Some(tensor.f_narrow(curr_idx, start, length.max(0))?), curr_idx + 1)
-                    } else {
+                    // Map the bounds onto aten::slice, which implements Python
+                    // slicing semantics natively: negative bounds wrap around
+                    // the dimension size and out-of-range bounds clamp, so
+                    // t.i((..-1,)) == t[:-1] and t.i((-2..,)) == t[-2:].
+                    let start = match start {
+                        Unbounded => 0,
+                        Included(s) => *s,
+                        // An excluded start of -1 points past the last element;
+                        // slice clamps an over-large start to the dim size.
+                        Excluded(-1) => i64::MAX,
+                        Excluded(s) => *s + 1,
+                    };
+                    let end = match end {
+                        Unbounded => None,
+                        // An inclusive end of -1 reaches through the last element.
+                        Included(-1) => None,
+                        Included(e) => Some(*e + 1),
+                        Excluded(e) => Some(*e),
+                    };
+                    if start == 0 && end.is_none() {
                         // Full-range slice: nothing to materialize.
                         (None, curr_idx + 1)
+                    } else {
+                        (Some(tensor.f_slice(curr_idx, start, end, 1)?), curr_idx + 1)
                     }
                 }
                 IndexSelect(index_tensor) => {

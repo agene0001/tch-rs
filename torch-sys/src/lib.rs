@@ -257,6 +257,7 @@ extern "C" {
     // Getters
     pub fn ati_to_int(arg: *mut CIValue) -> i64;
     pub fn ati_to_bool(arg: *mut CIValue) -> c_int;
+    pub fn ati_to_device(arg: *mut CIValue) -> c_int;
     pub fn ati_to_double(arg: *mut CIValue) -> f64;
     pub fn ati_to_tensor(arg: *mut CIValue) -> *mut C_tensor;
     pub fn ati_length(arg: *mut CIValue) -> c_int;

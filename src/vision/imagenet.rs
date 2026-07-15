@@ -45,12 +45,32 @@ pub fn load_image_from_memory(img_data: &[u8]) -> Result<Tensor, TchError> {
     normalize(&super::image::load_from_memory(img_data)?)
 }
 
-// Center crop of a [3, 256, 256] image down to 224x224. Composing the
-// centered 256 crop from load_and_resize with this centered 224 crop is
-// exactly the torchvision `Resize(256) + CenterCrop(224)` eval pipeline
-// (integer floor offsets compose: (l - 256)/2 + 16 == (l - 224)/2).
+// torchvision's `F.center_crop` offset: `int(round((full - crop) / 2.0))`.
+// The only possible fraction is .5, which Python 3 rounds half-to-even.
+fn crop_offset(full: i64, crop: i64) -> i64 {
+    let d = full - crop;
+    if d <= 0 {
+        // torchvision pads here; the short-side-256 resize guarantees
+        // full >= crop on both axes, so this is defensive only.
+        return 0;
+    }
+    let k = d / 2;
+    if d % 2 == 0 || k % 2 == 0 {
+        k
+    } else {
+        k + 1
+    }
+}
+
+// Centered 224x224 crop of a [3, h, w] image with torchvision's rounding
+// (`CenterCrop(224)`). A single crop from the short-side-256 resize, rather
+// than a 256 crop composed with a fixed 16-pixel offset: the composed floors
+// were off by one pixel from torchvision whenever the long side was odd with
+// an odd half-remainder.
 fn center_crop_224(t: &Tensor) -> Result<Tensor, TchError> {
-    t.f_narrow(1, 16, 224)?.f_narrow(2, 16, 224)
+    let size = t.size();
+    let (h, w) = (size[1], size[2]);
+    t.f_narrow(1, crop_offset(h, 224), 224)?.f_narrow(2, crop_offset(w, 224), 224)
 }
 
 /// Loads an image from a file and resizes it to 224x224 following the
@@ -58,7 +78,7 @@ fn center_crop_224(t: &Tensor) -> Result<Tensor, TchError> {
 /// take the centered 224x224 crop (`Resize(256) + CenterCrop(224)`).
 /// This applies the ImageNet normalization.
 pub fn load_image_and_resize224<T: AsRef<Path>>(path: T) -> Result<Tensor, TchError> {
-    normalize(&center_crop_224(&super::image::load_and_resize(path, 256, 256)?)?)
+    normalize(&center_crop_224(&super::image::load_and_resize_short_side(path, 256)?)?)
 }
 
 /// Loads an image from memory and resizes it to 224x224 following the
@@ -66,7 +86,9 @@ pub fn load_image_and_resize224<T: AsRef<Path>>(path: T) -> Result<Tensor, TchEr
 /// take the centered 224x224 crop (`Resize(256) + CenterCrop(224)`).
 /// This applies the ImageNet normalization.
 pub fn load_image_and_resize224_from_memory(img_data: &[u8]) -> Result<Tensor, TchError> {
-    normalize(&center_crop_224(&super::image::load_and_resize_from_memory(img_data, 256, 256)?)?)
+    normalize(&center_crop_224(&super::image::load_and_resize_short_side_from_memory(
+        img_data, 256,
+    )?)?)
 }
 
 /// Loads an image from a file and resize it to the specified width and height.

@@ -129,15 +129,43 @@ fn inception_e(p: nn::Path, c_in: i64) -> impl ModuleT {
     })
 }
 
+/// Remaps ImageNet-normalized inputs to the TF (-1, 1) convention, as done by
+/// torchvision's `Inception3._transform_input` (enabled on the pretrained model).
+fn transform_input(xs: &Tensor) -> Tensor {
+    let scale = Tensor::from_slice(&[0.229 / 0.5, 0.224 / 0.5, 0.225 / 0.5])
+        .view([3, 1, 1])
+        .to_kind(xs.kind())
+        .to_device(xs.device());
+    let shift =
+        Tensor::from_slice(&[(0.485 - 0.5) / 0.5, (0.456 - 0.5) / 0.5, (0.406 - 0.5) / 0.5])
+            .view([3, 1, 1])
+            .to_kind(xs.kind())
+            .to_device(xs.device());
+    xs * scale + shift
+}
+
+/// InceptionV3 with input transformation, matching torchvision's pretrained
+/// `inception_v3` (which sets `transform_input=True`). Use this when loading
+/// weights converted from torchvision together with ImageNet normalization.
 pub fn v3(p: &nn::Path, nclasses: i64) -> impl ModuleT {
-    nn::seq_t()
-        .add(conv_bn(p / "Conv2d_1a_3x3", 3, 32, 3, 0, 2))
+    v3_impl(p, nclasses, true)
+}
+
+/// InceptionV3 without input transformation, matching torchvision's
+/// from-scratch `Inception3()` constructor (`transform_input=False`).
+pub fn v3_no_transform_input(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+    v3_impl(p, nclasses, false)
+}
+
+fn v3_impl(p: &nn::Path, nclasses: i64, transform: bool) -> impl ModuleT {
+    let seq = if transform { nn::seq_t().add_fn(transform_input) } else { nn::seq_t() };
+    seq.add(conv_bn(p / "Conv2d_1a_3x3", 3, 32, 3, 0, 2))
         .add(conv_bn(p / "Conv2d_2a_3x3", 32, 32, 3, 0, 1))
         .add(conv_bn(p / "Conv2d_2b_3x3", 32, 64, 3, 1, 1))
-        .add_fn(|xs| max_pool2d(&xs.relu(), 3, 2))
+        .add_fn(|xs| max_pool2d(xs, 3, 2))
         .add(conv_bn(p / "Conv2d_3b_1x1", 64, 80, 1, 0, 1))
         .add(conv_bn(p / "Conv2d_4a_3x3", 80, 192, 3, 0, 1))
-        .add_fn(|xs| max_pool2d(&xs.relu(), 3, 2))
+        .add_fn(|xs| max_pool2d(xs, 3, 2))
         .add(inception_a(p / "Mixed_5b", 192, 32))
         .add(inception_a(p / "Mixed_5c", 256, 64))
         .add(inception_a(p / "Mixed_5d", 288, 64))
@@ -151,4 +179,21 @@ pub fn v3(p: &nn::Path, nclasses: i64) -> impl ModuleT {
         .add(inception_e(p / "Mixed_7c", 2048))
         .add_fn_t(|xs, train| xs.adaptive_avg_pool2d([1, 1]).dropout(0.5, train).flat_view())
         .add(nn::linear(p / "fc", 2048, nclasses, Default::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transform_input_matches_torchvision() {
+        let xs = Tensor::ones([1, 3, 2, 2], (crate::Kind::Float, crate::Device::Cpu));
+        let ys = transform_input(&xs);
+        // Per-channel: x * (std_c / 0.5) + (mean_c - 0.5) / 0.5 for x = 1.
+        let expected = [0.229f64 / 0.5 - 0.03, 0.224 / 0.5 - 0.088, 0.225 / 0.5 - 0.188];
+        for (c, want) in expected.iter().enumerate() {
+            let got: f64 = ys.select(1, c as i64).mean(crate::Kind::Double).try_into().unwrap();
+            assert!((got - want).abs() < 1e-6, "channel {c}: got {got}, want {want}");
+        }
+    }
 }

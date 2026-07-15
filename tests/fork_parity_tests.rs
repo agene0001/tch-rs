@@ -974,3 +974,56 @@ fn load_preserves_model_dtype_like_pytorch() {
     assert_eq!(f64::try_from(w3.mean(Kind::Half)).unwrap(), 1.5);
     let _ = std::fs::remove_file(&filename);
 }
+
+#[test]
+fn negative_slice_bounds_match_python() {
+    use tch::IndexOp;
+    let t = Tensor::arange(5, (Kind::Int64, Device::Cpu));
+    // t[:-1]
+    assert_eq!(Vec::<i64>::try_from(t.i((..-1,))).unwrap(), vec![0, 1, 2, 3]);
+    // t[-2:]
+    assert_eq!(Vec::<i64>::try_from(t.i((-2..,))).unwrap(), vec![3, 4]);
+    // t[1:-1] (bounds computed so clippy doesn't flag the literal as reversed)
+    let (start, end) = (1, -1);
+    assert_eq!(Vec::<i64>::try_from(t.i((start..end,))).unwrap(), vec![1, 2, 3]);
+    // t[-2:-1]
+    assert_eq!(Vec::<i64>::try_from(t.i((-2..-1,))).unwrap(), vec![3]);
+    // Inclusive negative end reaches through the last element: t[1:] here.
+    let end = -1;
+    assert_eq!(Vec::<i64>::try_from(t.i((1..=end,))).unwrap(), vec![1, 2, 3, 4]);
+    // Out-of-range bounds clamp instead of erroring, as in Python.
+    assert_eq!(Vec::<i64>::try_from(t.i((-100..,))).unwrap(), vec![0, 1, 2, 3, 4]);
+    assert_eq!(Vec::<i64>::try_from(t.i((1..100,))).unwrap(), vec![1, 2, 3, 4]);
+    // Reversed ranges stay empty.
+    let (start, end) = (3, 1);
+    assert_eq!(t.i((start..end,)).numel(), 0);
+    // Negative bounds on a non-leading dimension.
+    let t2 = Tensor::arange(6, (Kind::Int64, Device::Cpu)).view([2, 3]);
+    let r = t2.i((.., ..-1));
+    assert_eq!(r.size(), vec![2, 2]);
+    assert_eq!(Vec::<i64>::try_from(r.reshape(-1)).unwrap(), vec![0, 1, 3, 4]);
+}
+
+#[test]
+fn fallible_scalar_op_returns_err_not_panic() {
+    // Integers to negative integer powers raise an error in libtorch. The
+    // Scalar temporary used to run an error check in its Drop, which picked up
+    // the pending error and panicked before f_* could return Err.
+    let t = Tensor::from_slice(&[1i64, 2, 4]);
+    let result = t.f_pow_tensor_scalar(-1);
+    assert!(result.is_err(), "expected Err, got {result:?}");
+    // The error must have been consumed: the next op works normally.
+    let ok = t.f_pow_tensor_scalar(2).unwrap();
+    assert_eq!(Vec::<i64>::try_from(ok).unwrap(), vec![1, 4, 16]);
+}
+
+#[test]
+fn relu6_single_kernel_matches_reference() {
+    let t = Tensor::arange_start(-3, 9, (Kind::Float, Device::Cpu));
+    let fused = t.clamp(0., 6.);
+    let reference = t.relu().clamp_max(6.);
+    assert_eq!(
+        Vec::<f32>::try_from(fused).unwrap(),
+        Vec::<f32>::try_from(reference).unwrap()
+    );
+}

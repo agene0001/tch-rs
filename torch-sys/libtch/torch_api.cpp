@@ -199,7 +199,9 @@ int at_device(tensor t) {
           if (device.type() == at::kMPS) return -2;
           if (device.type() == at::kVulkan) return -3;
           if (device.type() == at::kCUDA) return device.index();)
-  return -2;
+  // Unknown device type or exception: return a distinct sentinel instead of
+  // silently misreporting the device as MPS.
+  return -4;
 }
 
 void at_backward(tensor t, int keep_graph, int create_graph) {
@@ -1245,9 +1247,19 @@ int ati_tag(ivalue i) {
       else if (i->isBoolList()) return 8; else if (i->isString()) return 9;
       else if (i->isTensorList()) return 10; else if (i->isList()) return 12;
       else if (i->isGenericDict()) return 13; else if (i->isObject()) return 14;
+      else if (i->isDevice()) return 15;
       throw std::invalid_argument(("unsupported tag " + i->tagKind()).c_str());
       return -1;)
   return -1;
+}
+
+int ati_to_device(ivalue i) {
+  PROTECT(auto device = i->toDevice();
+          if (device.type() == at::kCPU) return -1;
+          if (device.type() == at::kMPS) return -2;
+          if (device.type() == at::kVulkan) return -3;
+          if (device.type() == at::kCUDA) return device.index();)
+  return -4;
 }
 
 int64_t ati_to_int(ivalue i) {

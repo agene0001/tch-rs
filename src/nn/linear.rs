@@ -31,9 +31,14 @@ pub fn linear<'a, T: Borrow<super::Path<'a>>>(
     c: LinearConfig,
 ) -> Linear {
     let vs = vs.borrow();
+    // Sample the weight before the bias — PyTorch's `reset_parameters` draws
+    // in that order, so matching it keeps seeded initializations bit-exact.
+    let ws = vs.var("weight", &[out_dim, in_dim], c.ws_init);
     let bs = if c.bias {
         let bs_init = c.bs_init.unwrap_or_else(|| {
-            let bound = 1.0 / (in_dim as f64).sqrt();
+            // PyTorch guards `fan_in != 0`; max(1) keeps the degenerate
+            // in_dim == 0 case from producing an infinite bound.
+            let bound = 1.0 / (in_dim.max(1) as f64).sqrt();
             super::Init::Uniform { lo: -bound, up: bound }
         });
         Some(vs.var("bias", &[out_dim], bs_init))
@@ -41,7 +46,7 @@ pub fn linear<'a, T: Borrow<super::Path<'a>>>(
         None
     };
 
-    Linear { ws: vs.var("weight", &[out_dim, in_dim], c.ws_init), bs }
+    Linear { ws, bs }
 }
 
 impl super::module::Module for Linear {

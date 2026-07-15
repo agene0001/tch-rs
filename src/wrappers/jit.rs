@@ -32,8 +32,43 @@ pub enum IValue {
     Device(Device),
 }
 
+/// Owns a list of C-side ivalue pointers and frees them when dropped, so
+/// conversion sequences don't leak already-converted values when a later
+/// conversion or the consuming FFI call errors out. The C side copies the
+/// values it is handed, so freeing after the call is always correct.
+struct CIValues(Vec<*mut CIValue>);
+
+impl CIValues {
+    fn from_ivalues<'a>(
+        it: impl ExactSizeIterator<Item = &'a IValue>,
+    ) -> Result<Self, TchError> {
+        let mut v = CIValues(Vec::with_capacity(it.len()));
+        for x in it {
+            v.0.push(x.to_c()?);
+        }
+        Ok(v)
+    }
+
+    fn as_ptr(&self) -> *const *mut CIValue {
+        self.0.as_ptr()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl Drop for CIValues {
+    fn drop(&mut self) {
+        for &x in self.0.iter() {
+            // ati_free is a plain `delete`, no error check needed.
+            unsafe { ati_free(x) }
+        }
+    }
+}
+
 impl IValue {
-    fn type_str(self) -> &'static str {
+    fn type_str(&self) -> &'static str {
         match self {
             IValue::None => "None",
             IValue::Tensor(_) => "Tensor",
@@ -253,21 +288,12 @@ impl IValue {
             IValue::Double(f) => ati_double(*f),
             IValue::Bool(b) => ati_bool(i32::from(*b)),
             IValue::Tuple(v) => {
-                let v = v.iter().map(Self::to_c).collect::<Result<Vec<_>, TchError>>()?;
-                let tuple = ati_tuple(v.as_ptr(), v.len() as c_int);
-                for x in v {
-                    ati_free(x);
-                }
-
-                tuple
+                let v = CIValues::from_ivalues(v.iter())?;
+                ati_tuple(v.as_ptr(), v.len() as c_int)
             }
             IValue::GenericList(v) => {
-                let v = v.iter().map(Self::to_c).collect::<Result<Vec<_>, TchError>>()?;
-                let list = ati_generic_list(v.as_ptr(), v.len() as c_int);
-                for x in v {
-                    ati_free(x);
-                }
-                list
+                let v = CIValues::from_ivalues(v.iter())?;
+                ati_generic_list(v.as_ptr(), v.len() as c_int)
             }
             IValue::IntList(v) => ati_int_list(v.as_ptr(), v.len() as c_int),
             IValue::DoubleList(v) => ati_double_list(v.as_ptr(), v.len() as c_int),
@@ -292,15 +318,12 @@ impl IValue {
                 ati_string_list(v_ptr.as_ptr(), v.len() as c_int)
             }
             IValue::GenericDict(dict) => {
-                let v = dict
-                    .iter()
-                    .flat_map(|(k, v)| vec![Self::to_c(k), Self::to_c(v)])
-                    .collect::<Result<Vec<_>, TchError>>()?;
-                let dict = ati_generic_dict(v.as_ptr(), dict.len() as c_int);
-                for x in v {
-                    ati_free(x);
+                let mut kv = CIValues(Vec::with_capacity(2 * dict.len()));
+                for (k, v) in dict.iter() {
+                    kv.0.push(k.to_c()?);
+                    kv.0.push(v.to_c()?);
                 }
-                dict
+                ati_generic_dict(kv.as_ptr(), dict.len() as c_int)
             }
             IValue::Object(Object { c_ivalue }) => {
                 // Clone the object if necessary before passing the pointer to the C++ side.
@@ -315,7 +338,17 @@ impl IValue {
 
     // This consumes the pointer and frees the associated memory (unless it is an Object).
     pub(super) fn from_c(c_ivalue: *mut CIValue) -> Result<Self, TchError> {
-        let mut free = true;
+        // Free the input on every path — including early error returns —
+        // except when ownership moves into an `Object`.
+        struct Guard(*mut CIValue, bool);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                if self.1 {
+                    unsafe { ati_free(self.0) }
+                }
+            }
+        }
+        let mut guard = Guard(c_ivalue, true);
         let tag = unsafe_torch_err!(ati_tag(c_ivalue));
         let v = match tag {
             0 => IValue::None,
@@ -337,9 +370,12 @@ impl IValue {
                 let mut c_ivalues: Vec<_> =
                     (0..len).map(|_| std::ptr::null_mut::<CIValue>()).collect();
                 unsafe_torch_err!(ati_to_tuple(c_ivalue, c_ivalues.as_mut_ptr(), len));
-                let vec: Result<Vec<_>, _> =
+                // Convert every child eagerly: from_c consumes (frees) its
+                // argument even on failure, so no child pointer leaks when
+                // one of them fails to convert.
+                let vec: Vec<Result<_, _>> =
                     c_ivalues.iter().map(|&c_ivalue| Self::from_c(c_ivalue)).collect();
-                IValue::Tuple(vec?)
+                IValue::Tuple(vec.into_iter().collect::<Result<Vec<_>, _>>()?)
             }
             6 => {
                 let len = unsafe_torch_err!(ati_length(c_ivalue));
@@ -381,32 +417,36 @@ impl IValue {
                 let mut c_ivalues: Vec<_> =
                     (0..len).map(|_| std::ptr::null_mut::<CIValue>()).collect();
                 unsafe_torch_err!(ati_to_generic_list(c_ivalue, c_ivalues.as_mut_ptr(), len));
-                let vec: Result<Vec<_>, _> =
+                // Eager conversion: see the tuple arm.
+                let vec: Vec<Result<_, _>> =
                     c_ivalues.iter().map(|&c_ivalue| Self::from_c(c_ivalue)).collect();
-                IValue::GenericList(vec?)
+                IValue::GenericList(vec.into_iter().collect::<Result<Vec<_>, _>>()?)
             }
             13 => {
                 let len = unsafe_torch_err!(ati_length(c_ivalue));
                 let mut c_ivalues: Vec<_> =
                     (0..2 * len).map(|_| std::ptr::null_mut::<CIValue>()).collect();
                 unsafe_torch_err!(ati_to_generic_dict(c_ivalue, c_ivalues.as_mut_ptr(), len));
-                let mut res: Vec<(IValue, IValue)> = vec![];
-                for i in 0..(len as usize) {
-                    let key = Self::from_c(c_ivalues[2 * i])?;
-                    let value = Self::from_c(c_ivalues[2 * i + 1])?;
-                    res.push((key, value))
+                // Eager conversion: see the tuple arm.
+                let kvs: Vec<Result<_, _>> =
+                    c_ivalues.iter().map(|&c_ivalue| Self::from_c(c_ivalue)).collect();
+                let mut kvs = kvs.into_iter();
+                let mut res: Vec<(IValue, IValue)> = Vec::with_capacity(len as usize);
+                while let (Some(key), Some(value)) = (kvs.next(), kvs.next()) {
+                    res.push((key?, value?))
                 }
                 IValue::GenericDict(res)
             }
             14 => {
-                free = false;
+                guard.1 = false;
                 IValue::Object(Object { c_ivalue })
+            }
+            15 => {
+                let device = unsafe_torch_err!(ati_to_device(c_ivalue));
+                IValue::Device(Device::from_c_int(device))
             }
             _ => return Err(TchError::Kind(format!("unhandled tag {tag}"))),
         };
-        if free {
-            unsafe_torch_err!(ati_free(c_ivalue));
-        }
         Ok(v)
     }
 }
@@ -426,7 +466,9 @@ unsafe impl Sync for CModule {}
 
 impl Drop for CModule {
     fn drop(&mut self) {
-        unsafe_torch!(atm_free(self.c_module))
+        // atm_free is a plain `delete` and never sets the error TLS; checking it
+        // could panic in Drop on an error left pending by an unrelated call.
+        unsafe { atm_free(self.c_module) }
     }
 }
 
@@ -488,12 +530,11 @@ impl CModule {
     /// Performs the forward pass for a model on some specified ivalue inputs. This is equivalent
     /// to calling method_is with the 'forward' method name, and returns an arbitrary ivalue.
     pub fn forward_is<T: Borrow<IValue>>(&self, ts: &[T]) -> Result<IValue, TchError> {
-        let ts = ts.iter().map(|x| x.borrow().to_c()).collect::<Result<Vec<_>, TchError>>()?;
+        // The CIValues guard frees the converted inputs on every path,
+        // including early error returns.
+        let ts = CIValues::from_ivalues(ts.iter().map(|x| x.borrow()))?;
         let c_ivalue =
             unsafe_torch_err!(atm_forward_(self.c_module, ts.as_ptr(), ts.len() as c_int));
-        for x in ts {
-            unsafe { ati_free(x) }
-        }
         IValue::from_c(c_ivalue)
     }
 
@@ -520,7 +561,7 @@ impl CModule {
         method_name: &str,
         ts: &[T],
     ) -> Result<IValue, TchError> {
-        let ts = ts.iter().map(|x| x.borrow().to_c()).collect::<Result<Vec<_>, TchError>>()?;
+        let ts = CIValues::from_ivalues(ts.iter().map(|x| x.borrow()))?;
         let method_name = std::ffi::CString::new(method_name)?;
         let c_ivalue = unsafe_torch_err!(atm_method_(
             self.c_module,
@@ -528,9 +569,6 @@ impl CModule {
             ts.as_ptr(),
             ts.len() as c_int
         ));
-        for x in ts {
-            unsafe { ati_free(x) }
-        }
         IValue::from_c(c_ivalue)
     }
 
@@ -540,7 +578,7 @@ impl CModule {
         clz_name: &str,
         ts: &[T],
     ) -> Result<IValue, TchError> {
-        let ts = ts.iter().map(|x| x.borrow().to_c()).collect::<Result<Vec<_>, TchError>>()?;
+        let ts = CIValues::from_ivalues(ts.iter().map(|x| x.borrow()))?;
         let clz_name = std::ffi::CString::new(clz_name)?;
         let c_ivalue = unsafe_torch_err!(atm_create_class_(
             self.c_module,
@@ -548,9 +586,6 @@ impl CModule {
             ts.as_ptr(),
             ts.len() as c_int
         ));
-        for x in ts {
-            unsafe { ati_free(x) }
-        }
         IValue::from_c(c_ivalue)
     }
 
@@ -812,7 +847,7 @@ impl Object {
         method_name: &str,
         ts: &[T],
     ) -> Result<IValue, TchError> {
-        let ts = ts.iter().map(|x| x.borrow().to_c()).collect::<Result<Vec<_>, TchError>>()?;
+        let ts = CIValues::from_ivalues(ts.iter().map(|x| x.borrow()))?;
         let method_name = std::ffi::CString::new(method_name)?;
         let c_ivalue = unsafe_torch_err!(ati_object_method_(
             self.c_ivalue,
@@ -820,9 +855,6 @@ impl Object {
             ts.as_ptr(),
             ts.len() as c_int
         ));
-        for x in ts {
-            unsafe { ati_free(x) }
-        }
         IValue::from_c(c_ivalue)
     }
 
@@ -842,7 +874,8 @@ impl Object {
 
 impl Drop for Object {
     fn drop(&mut self) {
-        unsafe_torch!(ati_free(self.c_ivalue))
+        // ati_free is a plain `delete`; see `Drop for CModule`.
+        unsafe { ati_free(self.c_ivalue) }
     }
 }
 
@@ -875,5 +908,7 @@ mod tests {
             (IValue::from(42), IValue::from("foobar")),
             (IValue::from("foo"), IValue::from("bar")),
         ]);
+        round_trip(crate::Device::Cpu);
+        round_trip(crate::Device::Cuda(0));
     }
 }

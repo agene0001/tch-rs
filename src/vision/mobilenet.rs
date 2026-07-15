@@ -15,7 +15,8 @@ fn cbr(p: nn::Path, c_in: i64, c_out: i64, ks: i64, stride: i64, g: i64) -> impl
     nn::seq_t()
         .add(nn::conv2d(&p / 0, c_in, c_out, ks, conv2d))
         .add(nn::batch_norm2d(&p / 1, c_out, Default::default()))
-        .add_fn(|xs| xs.relu().clamp_max(6.))
+        // ReLU6 in a single kernel.
+        .add_fn(|xs| xs.clamp(0., 6.))
 }
 
 // Inverted Residual block.
@@ -75,9 +76,12 @@ pub fn v2(p: &nn::Path, nclasses: i64) -> impl ModuleT {
         Default::default(),
     ));
     nn::func_t(move |xs, train| {
+        // Dtype-preserving pooling, matching torchvision's
+        // adaptive_avg_pool2d + flatten (the previous two-pass mean upcast
+        // half-precision activations to f32).
         xs.apply_t(&features, train)
-            .mean_dim(Some([2i64].as_slice()), false, crate::Kind::Float)
-            .mean_dim(Some([2i64].as_slice()), false, crate::Kind::Float)
+            .adaptive_avg_pool2d([1, 1])
+            .flat_view()
             .apply_t(&classifier, train)
     })
 }

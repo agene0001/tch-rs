@@ -6,10 +6,17 @@
 // startup, its DllMain never runs, and `at::globalContext().hasCUDA()` stays
 // false at runtime — making `tch::Cuda::is_available()` always return false.
 //
-// We reference low-level CUDA symbols here rather than `c10::cuda::*` because
-// they're stable across libtorch minor versions and live in libraries the
-// linker is going to pull in anyway when CUDA is present (cublas + the CUDA
-// warp helpers in torch_cuda.dll).
+// The anchor symbol must be a *non-inline* exported function so its mangled
+// name is a real DLL export rather than an artifact of MSVC exporting
+// dllexport-marked inline functions instantiated inside the torch build.
+// `at::cuda::getCurrentCUDABlasHandle` is a plain TORCH_CUDA_CPP_API export
+// present from ancient PyTorch releases through current main. (An earlier
+// revision anchored on `CachingHostAllocator_emptyCache`, which is a
+// deprecated inline wrapper upstream and scheduled for removal.)
+//
+// Note this function is never called at runtime: the Rust side only takes its
+// address in a `#[used]` static (src/tensor/mod.rs) / a black_box reference,
+// which is all the linker needs.
 #include <stdio.h>
 #include <stdint.h>
 #include <stdexcept>
@@ -19,20 +26,20 @@ extern "C" {
     void dummy_cuda_dependency();
 }
 
+// Reproduce cublasHandle_t without pulling in the cublas headers; MSVC
+// mangling only needs the pointee type's name to match.
+struct cublasContext;
+typedef struct cublasContext* cublasHandle_t;
+
 namespace at {
 namespace cuda {
-// Stable since PyTorch 2.3 — the original `getCurrentCUDABlasHandle` /
-// `warp_size` symbols used in the pre-16e8f59 stub were renamed/removed
-// in later libtorch releases, breaking the mangled-name match. The host
-// allocator API has held its export across recent libtorch versions and is
-// cheap to invoke (no-op when the allocator hasn't been used).
-void CachingHostAllocator_emptyCache();
+cublasHandle_t getCurrentCUDABlasHandle();
 } // namespace cuda
 } // namespace at
 
 void dummy_cuda_dependency() {
     try {
-        at::cuda::CachingHostAllocator_emptyCache();
+        at::cuda::getCurrentCUDABlasHandle();
     } catch (std::exception& e) {
         if (getenv("TCH_PRINT_CUDA_INIT_ERROR") != nullptr) {
             std::cerr << "error initializing cuda: " << e.what() << std::endl;

@@ -577,9 +577,9 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable will not be trainable so
     /// gradients will not be tracked.
-    /// The variable uses a float tensor initialized with zeros.
+    /// The tensor is initialized with zeros using the store's kind.
     pub fn f_zeros_no_train(&self, name: &str, dims: &[i64]) -> Result<Tensor, TchError> {
-        let z = Tensor::f_zeros(dims, (Kind::Float, self.device()))?;
+        let z = Tensor::f_zeros(dims, (self.kind(), self.device()))?;
         Ok(self.add(name, z, false))
     }
 
@@ -588,9 +588,9 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable will not be trainable so
     /// gradients will not be tracked.
-    /// The variable uses a float tensor initialized with ones.
+    /// The tensor is initialized with ones using the store's kind.
     pub fn f_ones_no_train(&self, name: &str, dims: &[i64]) -> Result<Tensor, TchError> {
-        let o = Tensor::f_ones(dims, (Kind::Float, self.device()))?;
+        let o = Tensor::f_ones(dims, (self.kind(), self.device()))?;
         Ok(self.add(name, o, false))
     }
 
@@ -611,7 +611,7 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable is trainable, its gradient
     /// will be tracked.
-    /// The variable uses a float tensor initialized with zeros.
+    /// The tensor is initialized with zeros using the store's kind.
     pub fn f_zeros(&self, name: &str, dims: &[i64]) -> Result<Tensor, TchError> {
         self.f_var(name, dims, Init::Const(0.))
     }
@@ -621,7 +621,7 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable is trainable, its gradient
     /// will be tracked.
-    /// The variable uses a float tensor initialized with ones.
+    /// The tensor is initialized with ones using the store's kind.
     pub fn f_ones(&self, name: &str, dims: &[i64]) -> Result<Tensor, TchError> {
         self.f_var(name, dims, Init::Const(1.))
     }
@@ -726,7 +726,7 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable will not be trainable so
     /// gradients will not be tracked.
-    /// The variable uses a float tensor initialized with zeros.
+    /// The tensor is initialized with zeros using the store's kind.
     pub fn zeros_no_train(&self, name: &str, dims: &[i64]) -> Tensor {
         self.f_zeros_no_train(name, dims).unwrap()
     }
@@ -736,7 +736,7 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable will not be trainable so
     /// gradients will not be tracked.
-    /// The variable uses a float tensor initialized with ones.
+    /// The tensor is initialized with ones using the store's kind.
     pub fn ones_no_train(&self, name: &str, dims: &[i64]) -> Tensor {
         self.f_ones_no_train(name, dims).unwrap()
     }
@@ -757,7 +757,7 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable is trainable, its gradient
     /// will be tracked.
-    /// The variable uses a float tensor initialized with zeros.
+    /// The tensor is initialized with zeros using the store's kind.
     pub fn zeros(&self, name: &str, dims: &[i64]) -> Tensor {
         self.f_zeros(name, dims).unwrap()
     }
@@ -767,7 +767,7 @@ impl<'a> Path<'a> {
     /// The new variable is named according to the name parameter and
     /// has the specified shape. The variable is trainable, its gradient
     /// will be tracked.
-    /// The variable uses a float tensor initialized with ones.
+    /// The tensor is initialized with ones using the store's kind.
     pub fn ones(&self, name: &str, dims: &[i64]) -> Tensor {
         self.f_ones(name, dims).unwrap()
     }
@@ -910,7 +910,7 @@ impl Entry<'_> {
 
     /// Returns the existing entry if, otherwise create a new variable.
     pub fn or_ones_no_train(self, dims: &[i64]) -> Tensor {
-        let o = Tensor::ones(dims, (Kind::Float, self.path.device()));
+        let o = Tensor::ones(dims, (self.path.kind(), self.path.device()));
         self.path.get_or_add_with_lock(self.name, o, false, self.variables)
     }
 
@@ -937,7 +937,7 @@ impl Entry<'_> {
 
     /// Returns the existing entry if, otherwise create a new variable.
     pub fn or_zeros_no_train(self, dims: &[i64]) -> Tensor {
-        let z = Tensor::zeros(dims, (Kind::Float, self.path.device()));
+        let z = Tensor::zeros(dims, (self.path.kind(), self.path.device()));
         self.path.get_or_add_with_lock(self.name, z, false, self.variables)
     }
 }

@@ -24,6 +24,13 @@ impl Cuda {
 
     /// Returns true if at least one CUDA device is available.
     pub fn is_available() -> bool {
+        // Deterministic complement to the `#[used]` static in tensor/mod.rs:
+        // referencing the stub from a function callers actually invoke
+        // guarantees the CUDA link anchor survives archive member selection
+        // even if unlucky CGU partitioning strands the static in an otherwise
+        // unreferenced object file.
+        #[cfg(all(target_os = "windows", use_cuda))]
+        std::hint::black_box(torch_sys::dummy_cuda_dependency as usize);
         unsafe_torch!(torch_sys::cuda::atc_cuda_is_available()) != 0
     }
 
@@ -98,6 +105,9 @@ impl Device {
             -2 => Device::Mps,
             -3 => Device::Vulkan,
             index if index >= 0 => Device::Cuda(index as usize),
+            -4 => panic!(
+                "libtorch reported a device type not supported by tch (not cpu/cuda/mps/vulkan)"
+            ),
             _ => panic!("unexpected device {v}"),
         }
     }

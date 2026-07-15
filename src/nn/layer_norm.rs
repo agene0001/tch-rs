@@ -8,6 +8,10 @@ pub struct LayerNormConfig {
     pub cudnn_enabled: bool,
     pub eps: f64,
     pub elementwise_affine: bool,
+    /// Whether a bias is learnt alongside the weight when
+    /// `elementwise_affine` is set, matching `nn.LayerNorm(bias=...)`
+    /// (PyTorch >= 2.1). Ignored when `elementwise_affine` is false.
+    pub bias: bool,
     pub ws_init: super::Init,
     pub bs_init: super::Init,
 }
@@ -18,6 +22,7 @@ impl Default for LayerNormConfig {
             cudnn_enabled: true,
             eps: 1e-5,
             elementwise_affine: true,
+            bias: true,
             ws_init: super::Init::Const(1.),
             bs_init: super::Init::Const(0.),
         }
@@ -42,8 +47,10 @@ pub fn layer_norm<'a, T: Borrow<super::Path<'a>>>(
 
     let (ws, bs) = if config.elementwise_affine {
         let ws = vs.var("weight", normalized_shape.as_slice(), config.ws_init);
-        let bs = vs.var("bias", normalized_shape.as_slice(), config.bs_init);
-        (Some(ws), Some(bs))
+        let bs = config
+            .bias
+            .then(|| vs.var("bias", normalized_shape.as_slice(), config.bs_init));
+        (Some(ws), bs)
     } else {
         (None, None)
     };

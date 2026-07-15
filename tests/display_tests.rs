@@ -7,10 +7,11 @@ fn display_scalar() {
     assert_eq!(&s, "[-1234]\nTensor[[], Int64]");
     let s = format!("{}", &t / 10.0);
     assert_eq!(&s, "[-123.4000]\nTensor[[], Float]");
+    // Exponents print PyTorch-style: explicit sign, at least two digits.
     let s = format!("{}", &t / 1e8);
-    assert_eq!(&s, "[-1.2340e-5]\nTensor[[], Float]");
+    assert_eq!(&s, "[-1.2340e-05]\nTensor[[], Float]");
     let s = format!("{}", &t * 1e8);
-    assert_eq!(&s, "[-1.2340e11]\nTensor[[], Float]");
+    assert_eq!(&s, "[-1.2340e+11]\nTensor[[], Float]");
     let s = format!("{}", &t * 0.);
     assert_eq!(&s, "[-0.]\nTensor[[], Float]");
     let s = format!("{}", &t * (-0.));
@@ -41,6 +42,16 @@ Tensor[[50], Float]"#;
     let t = Tensor::ones([11000], kind::FLOAT_CPU) * 42;
     let s = format!("{t}");
     assert_eq!(&s, "[42., 42., 42., ..., 42., 42., 42.]\nTensor[[11000], Float]");
+}
+
+#[test]
+fn display_complex() {
+    // Complex tensors used to print nothing but the trailing type line.
+    let re = Tensor::from_slice(&[1.0f32, -0.5]);
+    let im = Tensor::from_slice(&[2.0f32, 4.25]);
+    let t = Tensor::complex(&re, &im);
+    let s = format!("{t}");
+    assert_eq!(&s, "[ 1.0000+2.0000j, -0.5000+4.2500j]\nTensor[[2], ComplexFloat]");
 }
 
 #[test]

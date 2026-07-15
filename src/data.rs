@@ -136,7 +136,9 @@ impl Iterator for Iter2 {
                 // Pin the batch then issue a non-blocking transfer so the copy
                 // can overlap with host-side work. Pinning only pays off for
                 // CUDA targets; other devices keep the plain blocking path.
-                Device::Cuda(_) if self.pin_memory => {
+                // Pinning is only valid on CPU-resident tensors — a dataset
+                // already living on a GPU falls through to the plain path.
+                Device::Cuda(_) if self.pin_memory && xs.device() == Device::Cpu => {
                     let xs = xs.pin_memory(self.device);
                     let ys = ys.pin_memory(self.device);
                     let (xk, yk) = (xs.kind(), ys.kind());

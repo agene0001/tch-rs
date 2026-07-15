@@ -301,12 +301,32 @@ impl FloatFormatter {
     }
 }
 
+/// Scientific notation the way PyTorch prints it: an explicit exponent sign
+/// and at least two exponent digits (`1.0000e-04`, `3.1416e+00`), where Rust's
+/// `{:e}` would produce `1e-4` / `3.1416e0`.
+fn fmt_sci<T: std::fmt::Write>(
+    v: f64,
+    precision: usize,
+    max_w: usize,
+    f: &mut T,
+) -> std::fmt::Result {
+    let s = format!("{v:.precision$e}");
+    let s = match s.split_once('e') {
+        Some((mantissa, exp)) => match exp.parse::<i32>() {
+            Ok(exp) => format!("{mantissa}e{exp:+03}"),
+            Err(_) => s,
+        },
+        None => s,
+    };
+    write!(f, "{s:>max_w$}")
+}
+
 impl TensorFormatter for FloatFormatter {
     type Elem = f64;
 
     fn fmt<T: std::fmt::Write>(&self, v: Self::Elem, max_w: usize, f: &mut T) -> std::fmt::Result {
         if self.sci_mode {
-            write!(f, "{v:width$.prec$e}", v = v, width = max_w, prec = self.precision)
+            fmt_sci(v, self.precision, max_w, f)
         } else if self.int_mode {
             if v.is_finite() {
                 write!(f, "{v:width$.0}.", v = v, width = max_w - 1)
@@ -342,6 +362,32 @@ impl TensorFormatter for IntFormatter {
 
     fn values(tensor: &Tensor) -> Vec<Self::Elem> {
         Vec::<Self::Elem>::try_from(tensor.reshape(-1)).unwrap()
+    }
+}
+
+struct ComplexFormatter {
+    precision: usize,
+}
+
+impl TensorFormatter for ComplexFormatter {
+    type Elem = (f64, f64);
+
+    fn fmt<T: std::fmt::Write>(&self, v: Self::Elem, max_w: usize, f: &mut T) -> std::fmt::Result {
+        let (re, im) = v;
+        let prec = self.precision;
+        let s = format!("{re:.prec$}{im:+.prec$}j");
+        write!(f, "{s:>max_w$}")
+    }
+
+    fn value(tensor: &Tensor) -> Self::Elem {
+        (tensor.real().double_value(&[]), tensor.imag().double_value(&[]))
+    }
+
+    fn values(tensor: &Tensor) -> Vec<Self::Elem> {
+        let t = tensor.reshape(-1);
+        let re = Vec::<f64>::try_from(t.real()).unwrap();
+        let im = Vec::<f64>::try_from(t.imag()).unwrap();
+        re.into_iter().zip(im).collect()
     }
 }
 
@@ -420,7 +466,17 @@ impl std::fmt::Display for Tensor {
                     tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
                     writeln!(f)?;
                 }
-                BasicKind::Complex => {}
+                BasicKind::Complex => {
+                    // Tensors whose kind can't be decoded also land on this
+                    // branch (`BasicKind::for_tensor` maps `f_kind` errors
+                    // here); only format genuinely complex kinds.
+                    if self.f_kind().is_ok() {
+                        let tf = ComplexFormatter { precision: po.precision };
+                        let max_w = tf.max_width(&to_display);
+                        tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
+                        writeln!(f)?;
+                    }
+                }
             };
             let kind = match self.f_kind() {
                 Ok(kind) => format!("{kind:?}"),

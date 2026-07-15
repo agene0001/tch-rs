@@ -252,7 +252,16 @@ impl Optimizer {
             // The stack above requires every grad norm to live on a single
             // device, so clip_coef is already colocated with all the grads:
             // no per-parameter to_device dispatch is needed.
-            let total_norm = Tensor::stack(&norms, 0).norm();
+            // Mixed-precision models produce grads (and thus norms) of
+            // different dtypes, which stack rejects; retry in a common dtype
+            // like PyTorch's per-(device, dtype) grouping. The fallback only
+            // runs when the fast same-dtype stack fails.
+            let stacked = Tensor::f_stack(&norms, 0).unwrap_or_else(|_| {
+                let norms: Vec<_> =
+                    norms.iter().map(|n| n.to_kind(crate::Kind::Double)).collect();
+                Tensor::stack(&norms, 0)
+            });
+            let total_norm = stacked.norm();
             let clip_coef = (max / (total_norm + 1e-6)).clamp_max(1.0);
             for var in v.trainable_variables.iter() {
                 let mut grad = var.tensor.grad();
@@ -305,6 +314,14 @@ impl Optimizer {
     }
 
     /// Sets the optimizer momentum.
+    ///
+    /// For SGD and RMSprop this sets the actual momentum parameter. **For
+    /// Adam and AdamW there is no momentum; this sets `beta1` instead**, the
+    /// same as editing `param_groups[...]["betas"]` in PyTorch. Note that the
+    /// bias-correction terms (`1 - beta1^step`) are recomputed with the new
+    /// value for the already-accumulated step count, so driving an SGD-style
+    /// momentum schedule against an Adam optimizer will silently change the
+    /// scale of every subsequent update.
     pub fn set_momentum(&mut self, m: f64) {
         self.opt.set_momentum(m).unwrap()
     }
@@ -314,7 +331,10 @@ impl Optimizer {
         self.opt.set_learning_rate_group(group, lr).unwrap()
     }
 
-    /// Sets the optimizer momentum.
+    /// Sets the optimizer momentum for a parameter group.
+    ///
+    /// For Adam/AdamW this sets `beta1`, not a momentum parameter — see
+    /// [`Optimizer::set_momentum`] for the caveats.
     pub fn set_momentum_group(&mut self, group: usize, m: f64) {
         self.opt.set_momentum_group(group, m).unwrap()
     }

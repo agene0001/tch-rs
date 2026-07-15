@@ -39,6 +39,14 @@ pub fn embedding<'a, T: Borrow<super::Path<'a>>>(
     config: EmbeddingConfig,
 ) -> Embedding {
     let vs = vs.borrow();
+    let mut config = config;
+    // Python normalizes negative padding_idx values (-2 is the second-to-last
+    // row, etc.); do the same so ported code behaves identically. -1 is
+    // excluded: this crate reserves it as the "no padding" sentinel (PyTorch
+    // uses None) — a Python padding_idx of -1 is num_embeddings - 1 here.
+    if config.padding_idx < -1 {
+        config.padding_idx += num_embeddings;
+    }
     let ws = vs.var("weight", &[num_embeddings, embedding_dim], config.ws_init);
     // PyTorch zeroes the padding_idx row after init (and the embedding op
     // keeps its gradient at zero), so padding tokens embed to an exact zero
