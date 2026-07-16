@@ -44,22 +44,27 @@ impl Header {
     fn to_string(&self) -> Result<String, TchError> {
         let fortran_order = if self.fortran_order { "True" } else { "False" };
         let mut shape = self.shape.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+        // Write every kind `parse` can read back, so npy round-trips; bool is
+        // byte-order-free and uses the '|' prefix like numpy itself does.
         let descr = match self.descr {
-            Kind::Half => "f2",
-            Kind::Float => "f4",
-            Kind::Double => "f8",
-            Kind::Int => "i4",
-            Kind::Int64 => "i8",
-            Kind::Int16 => "i2",
-            Kind::Int8 => "i1",
-            Kind::Uint8 => "u1",
+            Kind::Half => "<f2",
+            Kind::Float => "<f4",
+            Kind::Double => "<f8",
+            Kind::Int => "<i4",
+            Kind::Int64 => "<i8",
+            Kind::Int16 => "<i2",
+            Kind::Int8 => "|i1",
+            Kind::Uint8 => "|u1",
+            Kind::Bool => "|b1",
+            Kind::ComplexFloat => "<c8",
+            Kind::ComplexDouble => "<c16",
             descr => return Err(TchError::FileFormat(format!("unsupported kind {descr:?}"))),
         };
         if !shape.is_empty() {
             shape.push(',')
         }
         Ok(format!(
-            "{{'descr': '<{descr}', 'fortran_order': {fortran_order}, 'shape': ({shape}), }}"
+            "{{'descr': '{descr}', 'fortran_order': {fortran_order}, 'shape': ({shape}), }}"
         ))
     }
 
@@ -186,7 +191,7 @@ impl crate::Tensor {
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut result = vec![];
         for i in 0..zip.len() {
-            let mut reader = zip.by_index(i).unwrap();
+            let mut reader = zip.by_index(i)?;
             let name = {
                 let name = reader.name();
                 name.strip_suffix(NPY_SUFFIX).unwrap_or(name).to_owned()
@@ -215,7 +220,12 @@ impl crate::Tensor {
             header.push(' ')
         }
         header.push('\n');
-        f.write_all(&[(header.len() % 256) as u8, (header.len() / 256) as u8])?;
+        // The npy v1 header-length field is a u16: error out rather than
+        // writing a silently corrupt file for a pathological shape.
+        let header_len = u16::try_from(header.len()).map_err(|_| {
+            TchError::FileFormat(format!("npy header too long ({} bytes)", header.len()))
+        })?;
+        f.write_all(&header_len.to_le_bytes())?;
         f.write_all(header.as_bytes())?;
         let numel = self.numel();
         let mut content = vec![0u8; numel * kind.elt_size_in_bytes()];

@@ -81,6 +81,9 @@ impl Iter2 {
     pub fn shuffle(&mut self) -> &mut Iter2 {
         self.shuffle_index =
             Some(Tensor::randperm(self.total_size, (Kind::Int64, self.xs.device())));
+        // Rewind so that re-shuffling an exhausted iterator starts a fresh
+        // epoch instead of yielding zero batches.
+        self.batch_index = 0;
         self
     }
 
@@ -207,7 +210,11 @@ impl TextData {
     }
 
     pub fn char_to_label(&self, c: char) -> Result<u8, TchError> {
-        match self.label_for_char.get(&(c as u8)) {
+        // The dataset is byte-based: reject chars above U+00FF instead of
+        // letting `as u8` truncate them onto an unrelated label.
+        let byte = u8::try_from(c as u32)
+            .map_err(|_| TchError::Convert(format!("cannot find char {c}")))?;
+        match self.label_for_char.get(&byte) {
             None => Err(TchError::Convert(format!("cannot find char {c}"))),
             Some(v) => Ok(*v),
         }

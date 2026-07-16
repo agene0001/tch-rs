@@ -1090,3 +1090,90 @@ fn inception_aux_logits() {
     assert_eq!(main.size(), vec![1, 10]);
     assert!(aux.is_none());
 }
+
+// Runs a small deterministic training loop and returns the per-step losses
+// plus the final flattened weights, so the foreach (multi-tensor) optimizers
+// can be checked against libtorch's C++ reference implementations.
+fn train_tiny_net(opt_of: impl FnOnce(&nn::VarStore) -> nn::Optimizer) -> (Vec<f64>, Vec<f64>) {
+    tch::manual_seed(42);
+    let vs = nn::VarStore::new(Device::Cpu);
+    let root = vs.root();
+    let l1 = nn::linear(&root / "l1", 4, 8, Default::default());
+    let l2 = nn::linear(&root / "l2", 8, 1, Default::default());
+    let mut opt = opt_of(&vs);
+    let xs = (Tensor::arange(20, (Kind::Float, Device::Cpu)).view([5, 4]) - 10.0) / 7.0;
+    let ys = (Tensor::arange(5, (Kind::Float, Device::Cpu)).view([5, 1]) - 2.0) / 3.0;
+    let mut losses = Vec::new();
+    for _ in 0..8 {
+        let loss = xs.apply(&l1).relu().apply(&l2).mse_loss(&ys, tch::Reduction::Mean);
+        opt.backward_step(&loss);
+        losses.push(f64::try_from(&loss).unwrap());
+    }
+    let mut weights = Vec::new();
+    // HashMap iteration order is nondeterministic: sort by name so the two
+    // runs being compared serialize their weights identically.
+    let mut named: Vec<_> = vs.variables().into_iter().collect();
+    named.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_name, t) in named {
+        weights.extend(Vec::<f64>::try_from(t.to_kind(Kind::Double).view(-1)).unwrap());
+    }
+    (losses, weights)
+}
+
+fn assert_all_close(a: &[f64], b: &[f64], tol: f64, what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}: length mismatch");
+    for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+        assert!((x - y).abs() <= tol * (1.0 + x.abs()), "{what}[{i}]: {x} vs {y}");
+    }
+}
+
+#[test]
+fn foreach_adamw_matches_cpp_adamw() {
+    let (l_ref, w_ref) = train_tiny_net(|vs| nn::AdamW::default().build(vs, 1e-2).unwrap());
+    let (l_new, w_new) =
+        train_tiny_net(|vs| nn::ForeachAdamW::default().build(vs, 1e-2).unwrap());
+    assert_all_close(&l_ref, &l_new, 1e-6, "losses");
+    assert_all_close(&w_ref, &w_new, 1e-6, "weights");
+}
+
+#[test]
+fn foreach_adam_matches_cpp_adam_with_l2() {
+    // wd != 0 exercises the L2 (non-decoupled) branch, amsgrad the running
+    // max of the second moment.
+    let cfg = |amsgrad| nn::Adam { wd: 0.1, amsgrad, ..Default::default() };
+    let fcfg =
+        |amsgrad| nn::ForeachAdam { wd: 0.1, amsgrad, ..Default::default() };
+    for amsgrad in [false, true] {
+        let (l_ref, w_ref) = train_tiny_net(|vs| cfg(amsgrad).build(vs, 1e-2).unwrap());
+        let (l_new, w_new) = train_tiny_net(|vs| fcfg(amsgrad).build(vs, 1e-2).unwrap());
+        assert_all_close(&l_ref, &l_new, 1e-6, "losses");
+        assert_all_close(&w_ref, &w_new, 1e-6, "weights");
+    }
+}
+
+#[test]
+fn foreach_adamw_respects_group_lr_and_zero_grad() {
+    tch::manual_seed(7);
+    let vs = nn::VarStore::new(Device::Cpu);
+    let root = vs.root();
+    // Group 1 gets lr 0: its weights must not move.
+    let frozen = root.set_group(1).var("frozen", &[3], nn::Init::Const(1.0));
+    let live = root.var("live", &[3], nn::Init::Const(1.0));
+    let mut opt = nn::ForeachAdamW::default().build(&vs, 1e-1).unwrap();
+    opt.set_lr_group(1, 0.0);
+    for _ in 0..3 {
+        let loss = (&frozen + &live).sum(Kind::Float);
+        opt.backward_step(&loss);
+    }
+    let frozen_v = Vec::<f64>::try_from(frozen.to_kind(Kind::Double)).unwrap();
+    let live_v = Vec::<f64>::try_from(live.to_kind(Kind::Double)).unwrap();
+    // AdamW's decoupled decay also scales by lr, so lr 0 leaves the weights
+    // bit-identical.
+    assert_eq!(frozen_v, vec![1.0, 1.0, 1.0]);
+    assert!(live_v.iter().all(|&v| v < 1.0), "live weights should have moved: {live_v:?}");
+    // zero_grad through the foreach path actually zeroes the grads.
+    opt.zero_grad();
+    let g = frozen.grad();
+    assert!(g.defined());
+    assert_eq!(f64::try_from(g.abs().sum(Kind::Double)).unwrap(), 0.0);
+}

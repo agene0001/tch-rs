@@ -661,15 +661,18 @@ impl CModule {
             c_inputs.as_ptr(),
             c_inputs.len() as c_int
         ));
+        // Wrap immediately so the module is freed by Drop if the closure
+        // panics or atm_end_tracing errors, instead of leaking.
+        let module = CModule { c_module };
         let outputs = closure(inputs);
         let c_outputs = outputs.iter().map(|tensor| tensor.c_tensor).collect::<Vec<_>>();
         unsafe_torch_err!(atm_end_tracing(
-            c_module,
+            module.c_module,
             fn_name.as_ptr(),
             c_outputs.as_ptr(),
             c_outputs.len() as c_int,
         ));
-        Ok(CModule { c_module })
+        Ok(module)
     }
 }
 

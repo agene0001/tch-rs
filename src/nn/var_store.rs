@@ -227,20 +227,23 @@ impl VarStore {
     ) -> Result<(), TchError> {
         let named_tensors = self.named_tensors(&path)?;
         let mut variables = self.variables_.lock().unwrap();
-        for (name, var) in variables.named_variables.iter_mut() {
-            match named_tensors.get(name) {
-                Some(src) => crate::no_grad(|| {
-                    Self::copy_data(src, var, update_precision).map_err(|e| e.path_context(name))
-                })?,
-                None => {
-                    return Err(TchError::TensorNameNotFound(
-                        name.to_string(),
-                        path.as_ref().to_string_lossy().into_owned(),
-                    ));
+        // A single grad-mode toggle around the whole loop rather than one per
+        // variable (each guard costs two FFI crossings).
+        crate::no_grad(|| -> Result<(), TchError> {
+            for (name, var) in variables.named_variables.iter_mut() {
+                match named_tensors.get(name) {
+                    Some(src) => Self::copy_data(src, var, update_precision)
+                        .map_err(|e| e.path_context(name))?,
+                    None => {
+                        return Err(TchError::TensorNameNotFound(
+                            name.to_string(),
+                            path.as_ref().to_string_lossy().into_owned(),
+                        ));
+                    }
                 }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Loads the var-store variable values from a file.
@@ -308,20 +311,22 @@ impl VarStore {
         let named_tensors = Tensor::load_multi_from_stream_with_device(adapter, self.device)?;
         let named_tensors: HashMap<_, _> = named_tensors.into_iter().collect();
         let mut variables = self.variables_.lock().unwrap();
-        for (name, var) in variables.named_variables.iter_mut() {
-            match named_tensors.get(name) {
-                Some(src) => crate::no_grad(|| {
-                    Self::copy_data(src, var, false).map_err(|e| e.path_context(name))
-                })?,
-                None => {
-                    return Err(TchError::TensorNameNotFound(
-                        name.to_string(),
-                        "source stream".to_string(),
-                    ));
+        crate::no_grad(|| -> Result<(), TchError> {
+            for (name, var) in variables.named_variables.iter_mut() {
+                match named_tensors.get(name) {
+                    Some(src) => {
+                        Self::copy_data(src, var, false).map_err(|e| e.path_context(name))?
+                    }
+                    None => {
+                        return Err(TchError::TensorNameNotFound(
+                            name.to_string(),
+                            "source stream".to_string(),
+                        ));
+                    }
                 }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Loads the var-store variable values from a file if it exists.
@@ -341,16 +346,19 @@ impl VarStore {
         let named_tensors = self.named_tensors(&path)?;
         let mut variables = self.variables_.lock().unwrap();
         let mut missing_variables = Vec::new();
-        for (name, var) in variables.named_variables.iter_mut() {
-            match named_tensors.get(name) {
-                Some(src) => crate::no_grad(|| {
-                    Self::copy_data(src, var, false).map_err(|e| e.path_context(name))
-                })?,
-                None => {
-                    missing_variables.push(name.to_owned());
+        crate::no_grad(|| -> Result<(), TchError> {
+            for (name, var) in variables.named_variables.iter_mut() {
+                match named_tensors.get(name) {
+                    Some(src) => {
+                        Self::copy_data(src, var, false).map_err(|e| e.path_context(name))?
+                    }
+                    None => {
+                        missing_variables.push(name.to_owned());
+                    }
                 }
             }
-        }
+            Ok(())
+        })?;
         Ok(missing_variables)
     }
 
@@ -420,8 +428,25 @@ impl VarStore {
     /// All the variables in this var store have to exist with the same
     /// name in the source var store, otherwise an error is returned.
     pub fn copy(&mut self, src: &VarStore) -> Result<(), TchError> {
-        let mut variables = self.variables_.lock().unwrap();
-        let src_variables = src.variables_.lock().unwrap();
+        // Copying a store onto itself is the identity; bail out early, both
+        // to skip the copies and because locking the same mutex twice below
+        // would deadlock.
+        if Arc::ptr_eq(&self.variables_, &src.variables_) {
+            return Ok(());
+        }
+        // Take the two locks in a stable (address-based) order so concurrent
+        // a.copy(&b) / b.copy(&a) calls cannot deadlock on lock-order
+        // inversion.
+        let (mut variables, src_variables) =
+            if Arc::as_ptr(&self.variables_) < Arc::as_ptr(&src.variables_) {
+                let dst = self.variables_.lock().unwrap();
+                let src = src.variables_.lock().unwrap();
+                (dst, src)
+            } else {
+                let src = src.variables_.lock().unwrap();
+                let dst = self.variables_.lock().unwrap();
+                (dst, src)
+            };
         for name in variables.named_variables.keys() {
             if !src_variables.named_variables.contains_key(name) {
                 return Err(TchError::TensorNameNotFound(
@@ -430,13 +455,18 @@ impl VarStore {
                 ));
             }
         }
-        for (name, var) in variables.named_variables.iter_mut() {
-            let src_var = src_variables.named_variables.get(name).unwrap();
-            // copy_ performs the cross-device transfer itself; going through
-            // to_device first would materialize an extra intermediate copy.
-            crate::no_grad(|| var.f_copy_(src_var))?;
-        }
-        Ok(())
+        // A single grad-mode toggle around the whole loop rather than one
+        // per variable (each guard costs two FFI crossings).
+        crate::no_grad(|| -> Result<(), TchError> {
+            for (name, var) in variables.named_variables.iter_mut() {
+                let src_var = src_variables.named_variables.get(name).unwrap();
+                // copy_ performs the cross-device transfer itself; going
+                // through to_device first would materialize an extra
+                // intermediate copy.
+                var.f_copy_(src_var)?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -489,12 +519,23 @@ impl<'a> Path<'a> {
     /// `half`, `bfloat16`, `float` and `double` should be preferred as they ensure only
     /// float-like variables will be converted to the target type.
     pub fn set_kind(&mut self, kind: Kind) {
-        let path_root = self.path.join(SEP.to_string().as_str());
+        let prefix = self.subtree_prefix();
         let mut variables = self.var_store.variables_.lock().unwrap();
         for (variable_name, variable) in variables.named_variables.iter_mut() {
-            if variable_name.starts_with(&path_root) {
+            if variable_name.starts_with(&prefix) {
                 variable.set_data(&variable.to_kind(kind));
             }
+        }
+    }
+
+    /// Prefix matching exactly the variables in this sub-tree: the joined path
+    /// followed by a separator (so `encoder` does not also match sibling paths
+    /// such as `encoder2`), or the empty string at the root which matches all.
+    fn subtree_prefix(&self) -> String {
+        if self.path.is_empty() {
+            String::new()
+        } else {
+            format!("{}{}", self.path.join(SEP.to_string().as_str()), SEP)
         }
     }
 
@@ -503,10 +544,12 @@ impl<'a> Path<'a> {
     /// Only the float-like variable in the path sub-tree are cast to the target kind:
     /// other var store variables are unaffected
     fn set_float_kind(&mut self, kind: Kind) {
-        let path_root = self.path.join(SEP.to_string().as_str());
+        let prefix = self.subtree_prefix();
         let mut variables = self.var_store.variables_.lock().unwrap();
         for (variable_name, variable) in variables.named_variables.iter_mut() {
-            if variable_name.starts_with(&path_root) & variable.is_floating_point() {
+            // && short-circuits so the is_floating_point FFI call only runs
+            // for variables that are actually in this sub-tree.
+            if variable_name.starts_with(&prefix) && variable.is_floating_point() {
                 variable.set_data(&variable.to_kind(kind));
             }
         }
@@ -544,21 +587,31 @@ impl<'a> Path<'a> {
         self.set_float_kind(Kind::Double);
     }
 
-    pub fn add(&self, name: &str, tensor: Tensor, trainable: bool) -> Tensor {
+    /// Registers a tensor under the given name, erroring on duplicates.
+    ///
+    /// PyTorch's `register_parameter`/`register_buffer` raise on an
+    /// already-used name; the silent `name__<n>` rename this used to do
+    /// instead hid model-construction bugs and produced checkpoint names no
+    /// PyTorch model can consume.
+    pub fn f_add(&self, name: &str, tensor: Tensor, trainable: bool) -> Result<Tensor, TchError> {
         let path = self.path(name);
         let mut variables = self.var_store.variables_.lock().unwrap();
-        let path = if variables.named_variables.contains_key(&path) {
-            format!("{}__{}", path, variables.named_variables.len())
-        } else {
-            path
-        };
+        if variables.named_variables.contains_key(&path) {
+            return Err(TchError::Convert(format!("variable name already in use: {path}")));
+        }
         let tensor = if trainable { tensor.set_requires_grad(true) } else { tensor };
         if trainable {
             let var = Var { tensor: tensor.shallow_clone(), group: self.group };
             variables.trainable_variables.push(var);
         };
         variables.named_variables.insert(path, tensor.shallow_clone());
-        tensor
+        Ok(tensor)
+    }
+
+    /// Registers a tensor under the given name, panicking on duplicates.
+    /// See [`Path::f_add`].
+    pub fn add(&self, name: &str, tensor: Tensor, trainable: bool) -> Tensor {
+        self.f_add(name, tensor, trainable).unwrap()
     }
 
     fn get_or_add_with_lock(
@@ -590,7 +643,7 @@ impl<'a> Path<'a> {
     /// The tensor is initialized with zeros using the store's kind.
     pub fn f_zeros_no_train(&self, name: &str, dims: &[i64]) -> Result<Tensor, TchError> {
         let z = Tensor::f_zeros(dims, (self.kind(), self.device()))?;
-        Ok(self.add(name, z, false))
+        self.f_add(name, z, false)
     }
 
     /// Creates a new variable initialized with ones.
@@ -601,7 +654,7 @@ impl<'a> Path<'a> {
     /// The tensor is initialized with ones using the store's kind.
     pub fn f_ones_no_train(&self, name: &str, dims: &[i64]) -> Result<Tensor, TchError> {
         let o = Tensor::f_ones(dims, (self.kind(), self.device()))?;
-        Ok(self.add(name, o, false))
+        self.f_add(name, o, false)
     }
 
     /// Creates a new variable.
@@ -613,7 +666,7 @@ impl<'a> Path<'a> {
     /// related argument.
     pub fn f_var(&self, name: &str, dims: &[i64], init: Init) -> Result<Tensor, TchError> {
         let v = super::f_init(init, dims, self.device(), self.kind())?;
-        Ok(self.add(name, v, true))
+        self.f_add(name, v, true)
     }
 
     /// Creates a new variable initialized with zeros.
@@ -893,6 +946,13 @@ impl Entry<'_> {
 
     /// Returns the existing entry if, otherwise create a new variable.
     pub fn or_var_copy(self, tensor: &Tensor) -> Tensor {
+        // Return an existing entry untouched (like the other or_* methods)
+        // rather than clobbering it with the provided values — e.g. weights
+        // that were just loaded from a checkpoint must survive this call.
+        let path = self.path.path(self.name);
+        if let Some(v) = self.variables.named_variables.get(&path) {
+            return v.shallow_clone();
+        }
         let mut v = self.or_zeros(&tensor.size());
         crate::no_grad(|| v.copy_(tensor));
         v

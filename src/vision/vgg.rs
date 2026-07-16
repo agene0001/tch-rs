@@ -35,7 +35,22 @@ fn layers_e() -> Vec<Vec<i64>> {
 }
 
 fn conv2d(p: nn::Path, c_in: i64, c_out: i64) -> Conv2D {
-    let conv2d_cfg = nn::ConvConfig { stride: 1, padding: 1, ..Default::default() };
+    // torchvision's VGG `_initialize_weights` uses
+    // kaiming_normal_(mode="fan_out", nonlinearity="relu") for conv weights
+    // and zeros the biases; this only affects from-scratch training
+    // (pretrained loads overwrite it).
+    let ws_init = nn::Init::Kaiming {
+        dist: nn::init::NormalOrUniform::Normal,
+        fan: nn::init::FanInOut::FanOut,
+        non_linearity: nn::init::NonLinearity::ReLU,
+    };
+    let conv2d_cfg = nn::ConvConfig {
+        stride: 1,
+        padding: 1,
+        ws_init,
+        bs_init: Some(nn::Init::Const(0.)),
+        ..Default::default()
+    };
     nn::conv2d(p, c_in, c_out, 3, conv2d_cfg)
 }
 
@@ -57,17 +72,24 @@ fn vgg(p: &nn::Path, cfg: Vec<Vec<i64>>, nclasses: i64, batch_norm: bool) -> Seq
         }
         seq = seq.add_fn(|xs| xs.max_pool2d_default(2));
     }
+    // torchvision's `_initialize_weights` uses normal_(0, 0.01) for linear
+    // weights and zeros the biases (from-scratch training only).
+    let linear_cfg = nn::LinearConfig {
+        ws_init: nn::Init::Randn { mean: 0., stdev: 0.01 },
+        bs_init: Some(nn::Init::Const(0.)),
+        ..Default::default()
+    };
     // torchvision applies an adaptive 7x7 average pooling between the
     // features and the classifier; this is the identity for 224x224 inputs
     // but keeps other input sizes working.
     seq.add_fn(|xs| xs.adaptive_avg_pool2d([7, 7]).flat_view())
-        .add(nn::linear(&c / "0", 512 * 7 * 7, 4096, Default::default()))
+        .add(nn::linear(&c / "0", 512 * 7 * 7, 4096, linear_cfg))
         .add_fn(|xs| xs.relu())
         .add_fn_t(|xs, train| xs.dropout(0.5, train))
-        .add(nn::linear(&c / "3", 4096, 4096, Default::default()))
+        .add(nn::linear(&c / "3", 4096, 4096, linear_cfg))
         .add_fn(|xs| xs.relu())
         .add_fn_t(|xs, train| xs.dropout(0.5, train))
-        .add(nn::linear(&c / "6", 4096, nclasses, Default::default()))
+        .add(nn::linear(&c / "6", 4096, nclasses, linear_cfg))
 }
 
 pub fn vgg11(p: &nn::Path, nclasses: i64) -> SequentialT {

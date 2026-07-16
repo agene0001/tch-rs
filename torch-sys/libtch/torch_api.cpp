@@ -1,5 +1,7 @@
 #include "torch_api.h"
 #include <ATen/autocast_mode.h>
+#include <cmath>
+#include <map>
 #include <stdexcept>
 #include <torch/csrc/autograd/engine.h>
 #include <torch/csrc/jit/codegen/cuda/interface.h>
@@ -34,6 +36,7 @@ void at_manual_seed(int64_t seed) { torch::manual_seed(seed); }
 
 vector<torch::Tensor> of_carray_tensor(torch::Tensor **vs, int len) {
   vector<torch::Tensor> result;
+  result.reserve(len);
   for (int i = 0; i < len; ++i)
     result.push_back(*(vs[i]));
   return result;
@@ -42,6 +45,7 @@ vector<torch::Tensor> of_carray_tensor(torch::Tensor **vs, int len) {
 c10::List<c10::optional<torch::Tensor>> of_carray_tensor_opt(torch::Tensor **vs,
                                                              int len) {
   vector<c10::optional<torch::Tensor>> result;
+  result.reserve(len);
   for (int i = 0; i < len; ++i) {
     result.push_back(vs[i] != nullptr ? c10::optional<torch::Tensor>(*(vs[i]))
                                       : c10::nullopt);
@@ -197,14 +201,14 @@ static at::DeviceType autocast_device_type_of_int(int v) {
 // The zero-argument at::autocast::is_enabled/set_enabled entry points are
 // deprecated since PyTorch 2.4; these legacy wrappers keep their CUDA
 // semantics through the device-typed API.
-bool at_autocast_is_enabled() {
+int at_autocast_is_enabled() {
   PROTECT(return at::autocast::is_autocast_enabled(at::kCUDA);)
   return -1;
 }
 
-bool at_autocast_set_enabled(bool b) {
+int at_autocast_set_enabled(int b) {
   PROTECT(bool is_enabled = at::autocast::is_autocast_enabled(at::kCUDA);
-          at::autocast::set_autocast_enabled(at::kCUDA, b); return is_enabled;)
+          at::autocast::set_autocast_enabled(at::kCUDA, b != 0); return is_enabled;)
   return -1;
 }
 
@@ -259,7 +263,139 @@ int at_grad_set_enabled(int b) {
   return -1;
 }
 
-tensor at_get(tensor t, int index) {
+// One AdamW/Adam step over a homogeneous bucket of parameters (same device,
+// dtype, group, and step count — the Rust side buckets), implemented with the
+// batched _foreach kernels like torch.optim's default multi_tensor path: a
+// fixed handful of kernel launches per step instead of several per parameter,
+// which is what libtorch's C++ torch::optim (and hence tch's COptimizer)
+// still does. Matches _multi_tensor_adam/_multi_tensor_adamw exactly:
+//   decoupled_wd (AdamW): p *= 1 - lr*wd
+//   L2 mode (Adam):       g = g + wd*p            (out of place, grads untouched)
+//   m = lerp(m, g, 1-beta1); v = beta2*v + (1-beta2)*g*g
+//   denom = sqrt(max(v)) / sqrt(1-beta2^t) + eps  (amsgrad keeps the running max)
+//   p -= lr/(1-beta1^t) * m / denom
+// `step` is the post-increment step count, tracked host-side so the bias
+// corrections are plain doubles (no state_steps tensors, no host sync).
+char *at_foreach_adam_step(tensor *params, tensor *grads, tensor *exp_avgs,
+                           tensor *exp_avg_sqs, tensor *max_exp_avg_sqs,
+                           int ntensors, int64_t step, double lr, double beta1,
+                           double beta2, double weight_decay, double eps,
+                           int decoupled_wd) {
+  PROTECT_ERR(
+      std::vector<torch::Tensor> p, g, m, v;
+      p.reserve(ntensors); g.reserve(ntensors);
+      m.reserve(ntensors); v.reserve(ntensors);
+      for (int i = 0; i < ntensors; ++i) {
+        p.push_back(*(params[i]));
+        g.push_back(*(grads[i]));
+        m.push_back(*(exp_avgs[i]));
+        v.push_back(*(exp_avg_sqs[i]));
+      }
+      if (weight_decay != 0) {
+        if (decoupled_wd) {
+          at::_foreach_mul_(p, 1 - lr * weight_decay);
+        } else {
+          // Out of place: the caller's gradients must not be mutated.
+          g = at::_foreach_add(g, p, weight_decay);
+        }
+      }
+      at::_foreach_lerp_(m, g, 1 - beta1);
+      at::_foreach_mul_(v, beta2);
+      at::_foreach_addcmul_(v, g, g, 1 - beta2);
+      double bias_correction1 = 1 - std::pow(beta1, (double)step);
+      double bias_correction2 = 1 - std::pow(beta2, (double)step);
+      std::vector<torch::Tensor> denom;
+      if (max_exp_avg_sqs != nullptr) {
+        std::vector<torch::Tensor> vmax;
+        vmax.reserve(ntensors);
+        for (int i = 0; i < ntensors; ++i) vmax.push_back(*(max_exp_avg_sqs[i]));
+        at::_foreach_maximum_(vmax, v);
+        denom = at::_foreach_sqrt(vmax);
+      } else {
+        denom = at::_foreach_sqrt(v);
+      }
+      at::_foreach_div_(denom, std::sqrt(bias_correction2));
+      at::_foreach_add_(denom, eps);
+      at::_foreach_addcdiv_(p, m, denom, -lr / bias_correction1);
+  )
+}
+
+// Zeroes a list of gradients with a single batched kernel per device/dtype.
+char *at_foreach_zero(tensor *tensors, int ntensors) {
+  PROTECT_ERR(
+      std::vector<torch::Tensor> ts;
+      ts.reserve(ntensors);
+      for (int i = 0; i < ntensors; ++i) ts.push_back(*(tensors[i]));
+      if (!ts.empty()) at::_foreach_zero_(ts);
+  )
+}
+
+// Clips the given gradients' total norm in-place and returns the total norm,
+// following torch.nn.utils.clip_grad_norm_: per-tensor norms are batched with
+// the _foreach kernels (grouped by device/dtype, like PyTorch's grouping),
+// the clip coefficient stays on device (no host sync unless
+// error_if_nonfinite is set), and multiplying by the clamped-at-1 coefficient
+// leaves unclipped gradients bit-identical.
+tensor at_clip_grad_norm(tensor *grads, int ngrads, double max_norm,
+                         double norm_type, int error_if_nonfinite) {
+  PROTECT(
+      std::vector<torch::Tensor> gs;
+      gs.reserve(ngrads);
+      // detach() aliases the same storage, so the in-place mul below still
+      // updates the real gradients; it only drops the autograd metadata.
+      for (int i = 0; i < ngrads; ++i) gs.push_back(grads[i]->detach());
+      if (gs.empty())
+        return new torch::Tensor(torch::zeros({}, torch::kFloat));
+      // Group by (device, dtype): the _foreach kernels require homogeneous
+      // tensor lists.
+      std::map<std::pair<int64_t, int>, std::vector<torch::Tensor>> groups;
+      for (auto &g : gs) {
+        int64_t dkey = (int64_t)g.device().type() * 4096 +
+                       (g.device().has_index() ? g.device().index() : -1);
+        groups[{dkey, (int)g.scalar_type()}].push_back(g);
+      }
+      bool inf_norm = std::isinf(norm_type);
+      std::vector<torch::Tensor> norms;
+      norms.reserve(gs.size());
+      for (auto &kv : groups) {
+        auto &group = kv.second;
+        bool foreach_ok = true;
+        for (auto &g : group)
+          if (g.layout() != at::kStrided) foreach_ok = false;
+        if (foreach_ok && !inf_norm) {
+          auto group_norms = at::_foreach_norm(group, norm_type);
+          norms.insert(norms.end(), group_norms.begin(), group_norms.end());
+        } else {
+          for (auto &g : group)
+            norms.push_back(inf_norm ? g.abs().max() : g.norm(norm_type));
+        }
+      }
+      auto device = gs[0].device();
+      for (auto &n : norms)
+        if (n.device() != device) n = n.to(device);
+      auto stacked = torch::stack(norms);
+      auto total_norm = inf_norm ? stacked.max() : stacked.norm(norm_type);
+      if (error_if_nonfinite && !torch::isfinite(total_norm).item<bool>())
+        throw std::runtime_error(
+            "the total norm for gradients from parameters is non-finite, so "
+            "it cannot be clipped");
+      auto clip_coef_clamped = (max_norm / (total_norm + 1e-6)).clamp_max(1.0);
+      for (auto &kv : groups) {
+        auto &group = kv.second;
+        auto coef = clip_coef_clamped.device() == group[0].device()
+                        ? clip_coef_clamped
+                        : clip_coef_clamped.to(group[0].device());
+        bool foreach_ok = true;
+        for (auto &g : group)
+          if (g.layout() != at::kStrided) foreach_ok = false;
+        if (foreach_ok) at::_foreach_mul_(group, coef);
+        else for (auto &g : group) g.mul_(coef);
+      }
+      return new torch::Tensor(total_norm);)
+  return nullptr;
+}
+
+tensor at_get(tensor t, int64_t index) {
   PROTECT(return new torch::Tensor((*t)[index]);)
   return nullptr;
 }
@@ -932,6 +1068,24 @@ void atc_set_benchmark_cudnn(int b) {
   PROTECT(at::globalContext().setBenchmarkCuDNN(b);)
 }
 
+int atc_allow_tf32_cublas() {
+  PROTECT(return at::globalContext().allowTF32CuBLAS();)
+  return -1;
+}
+
+void atc_set_allow_tf32_cublas(int b) {
+  PROTECT(at::globalContext().setAllowTF32CuBLAS(b);)
+}
+
+int atc_allow_tf32_cudnn() {
+  PROTECT(return at::globalContext().allowTF32CuDNN();)
+  return -1;
+}
+
+void atc_set_allow_tf32_cudnn(int b) {
+  PROTECT(at::globalContext().setAllowTF32CuDNN(b);)
+}
+
 bool at_context_has_openmp() {
   PROTECT(return at::globalContext().hasOpenMP();)
   return 0;
@@ -1038,6 +1192,7 @@ module atm_load_str_on_device(char *data, size_t sz, int device) {
 
 tensor atm_forward(module m, tensor *tensors, int ntensors) {
   PROTECT(std::vector<torch::jit::IValue> inputs;
+          inputs.reserve(ntensors);
           for (int i = 0; i < ntensors; ++i) inputs.push_back(*(tensors[i]));
           torch::jit::IValue output = m->forward(std::move(inputs));
           if (!output.isTensor()) throw std::invalid_argument(
@@ -1048,6 +1203,7 @@ tensor atm_forward(module m, tensor *tensors, int ntensors) {
 
 ivalue atm_forward_(module m, ivalue *ivalues, int nivalues) {
   PROTECT(std::vector<torch::jit::IValue> inputs;
+          inputs.reserve(nivalues);
           for (int i = 0; i < nivalues; ++i) inputs.push_back(*(ivalues[i]));
           torch::jit::IValue output = m->forward(std::move(inputs));
           return new torch::jit::IValue(output);)
@@ -1056,6 +1212,7 @@ ivalue atm_forward_(module m, ivalue *ivalues, int nivalues) {
 
 tensor atm_method(module m, char *method_name, tensor *tensors, int ntensors) {
   PROTECT(std::vector<torch::jit::IValue> inputs;
+          inputs.reserve(ntensors);
           for (int i = 0; i < ntensors; ++i) inputs.push_back(*(tensors[i]));
           torch::jit::IValue output =
               m->get_method(method_name)(std::move(inputs));
@@ -1067,6 +1224,7 @@ tensor atm_method(module m, char *method_name, tensor *tensors, int ntensors) {
 
 ivalue atm_method_(module m, char *method_name, ivalue *ivalues, int nivalues) {
   PROTECT(std::vector<torch::jit::IValue> inputs;
+          inputs.reserve(nivalues);
           for (int i = 0; i < nivalues; ++i) inputs.push_back(*(ivalues[i]));
           torch::jit::IValue output =
               m->get_method(method_name)(std::move(inputs));
@@ -1077,6 +1235,7 @@ ivalue atm_method_(module m, char *method_name, ivalue *ivalues, int nivalues) {
 ivalue atm_create_class_(module m, char *clz_name, ivalue *ivalues,
                          int nivalues) {
   PROTECT(std::vector<torch::jit::IValue> inputs;
+          inputs.reserve(nivalues);
           for (int i = 0; i < nivalues; ++i) inputs.push_back(*(ivalues[i]));
 
           c10::QualifiedName base(clz_name);
@@ -1204,6 +1363,7 @@ ivalue ati_none() {
 
 ivalue ati_tuple(ivalue *is, int nvalues) {
   PROTECT(vector<torch::jit::IValue> vec;
+          vec.reserve(nvalues);
           for (int i = 0; i < nvalues; ++i) vec.push_back(*(is[i]));
           return new torch::jit::IValue(torch::ivalue::Tuple::create(vec));)
   return nullptr;
@@ -1211,6 +1371,7 @@ ivalue ati_tuple(ivalue *is, int nvalues) {
 
 ivalue ati_generic_list(ivalue *is, int nvalues) {
   PROTECT(c10::List<torch::jit::IValue> vec(c10::AnyType::get());
+          vec.reserve(nvalues);
           for (int i = 0; i < nvalues; ++i) vec.push_back(*(is[i]));
           return new torch::jit::IValue(c10::List<torch::jit::IValue>(vec));)
   return nullptr;
@@ -1248,6 +1409,7 @@ ivalue ati_generic_dict(ivalue *is, int nvalues) {
 
 ivalue ati_int_list(int64_t *is, int nvalues) {
   PROTECT(c10::List<int64_t> vec;
+          vec.reserve(nvalues);
           for (int i = 0; i < nvalues; ++i) vec.push_back(is[i]);
           return new torch::jit::IValue(vec);)
   return nullptr;
@@ -1255,6 +1417,7 @@ ivalue ati_int_list(int64_t *is, int nvalues) {
 
 ivalue ati_double_list(double *is, int nvalues) {
   PROTECT(c10::List<double> vec;
+          vec.reserve(nvalues);
           for (int i = 0; i < nvalues; ++i) vec.push_back(is[i]);
           return new torch::jit::IValue(vec);)
   return nullptr;
@@ -1262,6 +1425,7 @@ ivalue ati_double_list(double *is, int nvalues) {
 
 ivalue ati_bool_list(char *is, int nvalues) {
   PROTECT(c10::List<bool> vec;
+          vec.reserve(nvalues);
           for (int i = 0; i < nvalues; ++i) vec.push_back(is[i] != 0);
           return new torch::jit::IValue(vec);)
   return nullptr;
@@ -1269,6 +1433,7 @@ ivalue ati_bool_list(char *is, int nvalues) {
 
 ivalue ati_string_list(char **is, int nvalues) {
   PROTECT(c10::List<string> vec;
+          vec.reserve(nvalues);
           for (int i = 0; i < nvalues; ++i) vec.push_back(string(is[i]));
           return new torch::jit::IValue(vec);)
   return nullptr;
@@ -1276,6 +1441,7 @@ ivalue ati_string_list(char **is, int nvalues) {
 
 ivalue ati_tensor_list(tensor *is, int nvalues) {
   PROTECT(c10::List<at::Tensor> vec;
+          vec.reserve(nvalues);
           for (int i = 0; i < nvalues; ++i) vec.push_back(*(is[i]));
           return new torch::jit::IValue(vec);)
   return nullptr;

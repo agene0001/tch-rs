@@ -39,7 +39,7 @@ extern "C" {
     pub fn at_print(arg: *mut C_tensor);
     pub fn at_to_string(arg: *mut C_tensor, line_size: c_int) -> *mut c_char;
     pub fn at_dim(arg: *mut C_tensor) -> size_t;
-    pub fn at_get(arg: *mut C_tensor, index: c_int) -> *mut C_tensor;
+    pub fn at_get(arg: *mut C_tensor, index: i64) -> *mut C_tensor;
     pub fn at_requires_grad(arg: *mut C_tensor) -> c_int;
     pub fn at_shape(arg: *mut C_tensor, sz: *mut i64);
     pub fn at_stride(arg: *mut C_tensor, sz: *mut i64);
@@ -100,6 +100,29 @@ extern "C" {
         device: c_int,
     ) -> *mut C_tensor;
     pub fn at_grad_set_enabled(b: c_int) -> c_int;
+    pub fn at_clip_grad_norm(
+        grads: *const *mut C_tensor,
+        ngrads: c_int,
+        max_norm: f64,
+        norm_type: f64,
+        error_if_nonfinite: c_int,
+    ) -> *mut C_tensor;
+    pub fn at_foreach_adam_step(
+        params: *const *mut C_tensor,
+        grads: *const *mut C_tensor,
+        exp_avgs: *const *mut C_tensor,
+        exp_avg_sqs: *const *mut C_tensor,
+        max_exp_avg_sqs: *const *mut C_tensor,
+        ntensors: c_int,
+        step: i64,
+        lr: f64,
+        beta1: f64,
+        beta2: f64,
+        weight_decay: f64,
+        eps: f64,
+        decoupled_wd: c_int,
+    ) -> *mut c_char;
+    pub fn at_foreach_zero(tensors: *const *mut C_tensor, ntensors: c_int) -> *mut c_char;
     pub fn at_save(arg: *mut C_tensor, filename: *const c_char);
     pub fn at_save_to_stream(arg: *mut C_tensor, stream_ptr: *mut c_void);
     pub fn at_load(filename: *const c_char) -> *mut C_tensor;

@@ -63,8 +63,8 @@ void at__amp_non_finite_check_and_unscale(tensor, tensor, tensor);
 void at_autocast_clear_cache();
 int at_autocast_decrement_nesting();
 int at_autocast_increment_nesting();
-bool at_autocast_is_enabled();
-bool at_autocast_set_enabled(bool b);
+int at_autocast_is_enabled();
+int at_autocast_set_enabled(int b);
 // device_type: 0 = cpu, 1 = cuda, 2 = mps.
 int at_autocast_is_enabled_for(int device_type);
 int at_autocast_set_enabled_for(int device_type, int b);
@@ -74,8 +74,16 @@ void at_autocast_set_dtype(int device_type, int dtype);
 void at_backward(tensor, int, int);
 int at_requires_grad(tensor);
 int at_grad_set_enabled(int);
+tensor at_clip_grad_norm(tensor *grads, int ngrads, double max_norm,
+                         double norm_type, int error_if_nonfinite);
+char *at_foreach_adam_step(tensor *params, tensor *grads, tensor *exp_avgs,
+                           tensor *exp_avg_sqs, tensor *max_exp_avg_sqs,
+                           int ntensors, int64_t step, double lr, double beta1,
+                           double beta2, double weight_decay, double eps,
+                           int decoupled_wd);
+char *at_foreach_zero(tensor *tensors, int ntensors);
 
-tensor at_get(tensor, int index);
+tensor at_get(tensor, int64_t index);
 void at_fill_double(tensor, double);
 void at_fill_int64(tensor, int64_t);
 
@@ -211,6 +219,10 @@ void atc_synchronize(int64_t device_index);
 int atc_user_enabled_cudnn();
 void atc_set_user_enabled_cudnn(int b);
 void atc_set_benchmark_cudnn(int b);
+int atc_allow_tf32_cublas();
+void atc_set_allow_tf32_cublas(int b);
+int atc_allow_tf32_cudnn();
+void atc_set_allow_tf32_cudnn(int b);
 
 module atm_load(char *);
 module atm_load_on_device(char *, int device);

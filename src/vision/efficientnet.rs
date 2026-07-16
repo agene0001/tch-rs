@@ -14,6 +14,16 @@ pub struct MBConvConfig {
     num_layers: usize,
 }
 
+// torchvision initializes every EfficientNet conv with
+// kaiming_normal_(mode="fan_out") — the default a=0 leaky_relu gain is the
+// same sqrt(2) as relu — and zeros any bias; this only affects from-scratch
+// training (pretrained loads overwrite it).
+const CONV_WS_INIT: nn::Init = nn::Init::Kaiming {
+    dist: nn::init::NormalOrUniform::Normal,
+    fan: nn::init::FanInOut::FanOut,
+    non_linearity: nn::init::NonLinearity::ReLU,
+};
+
 fn make_divisible(v: f64, divisor: i64) -> i64 {
     let min_value = divisor;
     let new_v = i64::max(min_value, (v + divisor as f64 * 0.5) as i64 / divisor * divisor);
@@ -97,8 +107,14 @@ impl ConvNormActivation {
         // of (k - 1) / 2 rather than TF-style dynamic "same" padding. The two
         // differ on stride-2 convolutions (asymmetric 0/1 vs symmetric 1/1),
         // so the dynamic variant misaligns torchvision-exported weights.
-        let conv_config =
-            nn::ConvConfig { stride, groups, bias: false, padding: (k - 1) / 2, ..Default::default() };
+        let conv_config = nn::ConvConfig {
+            stride,
+            groups,
+            bias: false,
+            padding: (k - 1) / 2,
+            ws_init: CONV_WS_INIT,
+            ..Default::default()
+        };
         let conv2d = nn::conv2d(&vs / 0, i, o, k, conv_config);
         let bn2d = nn::batch_norm2d(&vs / 1, o, bn_config);
         Self { conv2d, bn2d, activation: true }
@@ -128,8 +144,16 @@ struct SqueezeExcitation {
 
 impl SqueezeExcitation {
     fn new(vs: nn::Path, input_channels: i64, squeeze_channels: i64) -> Self {
-        let fc1 = nn::conv2d(&vs / "fc1", input_channels, squeeze_channels, 1, Default::default());
-        let fc2 = nn::conv2d(&vs / "fc2", squeeze_channels, input_channels, 1, Default::default());
+        // The squeeze-excitation fc layers are Conv2d modules in torchvision,
+        // so the init loop gives them kaiming_normal_(mode="fan_out") weights
+        // and zeroed biases too.
+        let conv_config = nn::ConvConfig {
+            ws_init: CONV_WS_INIT,
+            bs_init: Some(nn::Init::Const(0.)),
+            ..Default::default()
+        };
+        let fc1 = nn::conv2d(&vs / "fc1", input_channels, squeeze_channels, 1, conv_config);
+        let fc2 = nn::conv2d(&vs / "fc2", squeeze_channels, input_channels, 1, conv_config);
         Self { fc1, fc2 }
     }
 }
@@ -260,8 +284,20 @@ impl EfficientNet {
         }
         let final_cna =
             ConvNormActivation::new(&f_p / (nconfigs + 1), last_out_c, final_out_c, 1, 1, 1, bn_config);
-        let classifier =
-            nn::linear(p / "classifier" / 1, final_out_c, nclasses, Default::default());
+        // torchvision draws the classifier weight from
+        // uniform_(-init_range, init_range) with init_range =
+        // 1/sqrt(out_features) and zeros its bias (from-scratch training only).
+        let init_range = 1.0 / (nclasses as f64).sqrt();
+        let classifier = nn::linear(
+            p / "classifier" / 1,
+            final_out_c,
+            nclasses,
+            nn::LinearConfig {
+                ws_init: nn::Init::Uniform { lo: -init_range, up: init_range },
+                bs_init: Some(nn::Init::Const(0.)),
+                ..Default::default()
+            },
+        );
         Self { init_cna, blocks, final_cna, classifier, dropout }
     }
 }

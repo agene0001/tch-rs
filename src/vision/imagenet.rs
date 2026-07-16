@@ -25,7 +25,10 @@ pub fn normalize(tensor: &Tensor) -> Result<Tensor, TchError> {
 
 pub fn unnormalize(tensor: &Tensor) -> Result<Tensor, TchError> {
     let (mean, std) = mean_and_std(tensor)?;
-    let tensor = (tensor.f_mul(&std)?.f_add(&mean)? * 255.0).clamp(0., 255.0).to_kind(Kind::Uint8);
+    // Round to the nearest integer like torchvision's save_image
+    // (mul(255).add_(0.5).clamp_(0, 255)) instead of truncating.
+    let tensor =
+        ((tensor.f_mul(&std)?.f_add(&mean)? * 255.0) + 0.5).clamp(0., 255.0).to_kind(Kind::Uint8);
     Ok(tensor)
 }
 
@@ -154,11 +157,14 @@ fn load_images_from_dir(dir: std::path::PathBuf) -> Result<Tensor, TchError> {
 pub fn load_from_dir<T: AsRef<Path>>(dir: T) -> Result<Dataset, TchError> {
     let train_path = dir.as_ref().join("train");
     let valid_path = dir.as_ref().join("val");
-    let classes = std::fs::read_dir(&valid_path)?
+    let mut classes = std::fs::read_dir(&valid_path)?
         .filter_map(|d| d.ok().map(|d| d.path()))
         .filter(|d| d.is_dir())
         .filter_map(|d| d.file_name().map(|d| d.to_os_string()))
         .collect::<Vec<_>>();
+    // Sort the class names so label indices are deterministic across
+    // filesystems, matching torchvision's ImageFolder.
+    classes.sort();
     println!("classes: {classes:?}");
     let mut train_images: Vec<Tensor> = vec![];
     let mut train_labels: Vec<Tensor> = vec![];

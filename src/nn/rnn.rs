@@ -1,5 +1,5 @@
 //! Recurrent Neural Networks
-use crate::{Device, Tensor};
+use crate::Tensor;
 use std::borrow::Borrow;
 
 /// Trait for Recurrent Neural Networks.
@@ -15,6 +15,16 @@ pub trait RNN {
     /// The input should have dimensions [batch_size, features].
     fn step(&self, input: &Tensor, state: &Self::State) -> Self::State;
 
+    /// Applies a single step of the recurrent network, specifying whether
+    /// training mode is active.
+    ///
+    /// Like PyTorch's `module.training`, `train` controls the inter-layer
+    /// dropout at call time. The default implementation ignores it.
+    fn step_t(&self, input: &Tensor, state: &Self::State, train: bool) -> Self::State {
+        let _ = train;
+        self.step(input, state)
+    }
+
     /// Applies multiple steps of the recurrent network.
     ///
     /// The input should have dimensions [batch_size, seq_len, features]
@@ -27,12 +37,33 @@ pub trait RNN {
         self.seq_init(input, &state)
     }
 
+    /// Applies multiple steps of the recurrent network, specifying whether
+    /// training mode is active.
+    ///
+    /// Like PyTorch's `module.training`, `train` controls the inter-layer
+    /// dropout at call time. The default implementation ignores it.
+    fn seq_t(&self, input: &Tensor, train: bool) -> (Tensor, Self::State) {
+        let batch_dim = input.size_at(0);
+        let state = self.zero_state(batch_dim);
+        self.seq_init_t(input, &state, train)
+    }
+
     /// Applies multiple steps of the recurrent network.
     ///
     /// The input should have dimensions [batch_size, seq_len, features]
     /// when `batch_first` is set (the default), [seq_len, batch_size,
     /// features] otherwise.
     fn seq_init(&self, input: &Tensor, state: &Self::State) -> (Tensor, Self::State);
+
+    /// Applies multiple steps of the recurrent network, specifying whether
+    /// training mode is active.
+    ///
+    /// Like PyTorch's `module.training`, `train` controls the inter-layer
+    /// dropout at call time. The default implementation ignores it.
+    fn seq_init_t(&self, input: &Tensor, state: &Self::State, train: bool) -> (Tensor, Self::State) {
+        let _ = train;
+        self.seq_init(input, state)
+    }
 }
 
 /// The state for a LSTM network, this contains two tensors.
@@ -60,6 +91,9 @@ pub struct RNNConfig {
     pub has_biases: bool,
     pub num_layers: i64,
     pub dropout: f64,
+    /// Default training-mode flag used by `seq`/`step`/`seq_init`; the
+    /// `_t`-suffixed variants take the flag per call instead, like PyTorch's
+    /// `module.training`.
     pub train: bool,
     pub bidirectional: bool,
     pub batch_first: bool,
@@ -145,7 +179,6 @@ pub struct LSTM {
     flat_weights: Vec<Tensor>,
     hidden_dim: i64,
     config: RNNConfig,
-    device: Device,
 }
 
 /// Creates a LSTM layer.
@@ -173,7 +206,7 @@ pub fn lstm<'a, T: Borrow<super::Path<'a>>>(
             c.bidirectional,
         );
     }
-    LSTM { flat_weights, hidden_dim, config: c, device: vs.device() }
+    LSTM { flat_weights, hidden_dim, config: c }
 }
 
 impl RNN for LSTM {
@@ -185,27 +218,41 @@ impl RNN for LSTM {
         let shape = [layer_dim, batch_dim, self.hidden_dim];
         // h and c must not share storage: an in-place update of one state
         // tensor should never silently modify the other.
-        let kind = self.flat_weights[0].kind();
-        let h = Tensor::zeros(shape, (kind, self.device));
-        let c = Tensor::zeros(shape, (kind, self.device));
+        // Kind and device come from the weights rather than a construction-time
+        // cache so the state follows the model through e.g. vs.set_device.
+        let (kind, device) = (self.flat_weights[0].kind(), self.flat_weights[0].device());
+        let h = Tensor::zeros(shape, (kind, device));
+        let c = Tensor::zeros(shape, (kind, device));
         LSTMState((h, c))
     }
 
     fn seq(&self, input: &Tensor) -> (Tensor, LSTMState) {
+        self.seq_t(input, self.config.train)
+    }
+
+    fn seq_t(&self, input: &Tensor, train: bool) -> (Tensor, LSTMState) {
         // The batch dimension comes second when batch_first is unset.
         let batch_dim = if self.config.batch_first { input.size_at(0) } else { input.size_at(1) };
         let state = self.zero_state(batch_dim);
-        self.seq_init(input, &state)
+        self.seq_init_t(input, &state, train)
     }
 
     fn step(&self, input: &Tensor, in_state: &LSTMState) -> LSTMState {
+        self.step_t(input, in_state, self.config.train)
+    }
+
+    fn step_t(&self, input: &Tensor, in_state: &LSTMState, train: bool) -> LSTMState {
         // Insert the singleton sequence dimension where the layout expects it.
         let input = input.unsqueeze(if self.config.batch_first { 1 } else { 0 });
-        let (_output, state) = self.seq_init(&input, in_state);
+        let (_output, state) = self.seq_init_t(&input, in_state, train);
         state
     }
 
     fn seq_init(&self, input: &Tensor, in_state: &LSTMState) -> (Tensor, LSTMState) {
+        self.seq_init_t(input, in_state, self.config.train)
+    }
+
+    fn seq_init_t(&self, input: &Tensor, in_state: &LSTMState, train: bool) -> (Tensor, LSTMState) {
         let LSTMState((h, c)) = in_state;
         let flat_weights = self.flat_weights.iter().collect::<Vec<_>>();
         let (output, h, c) = input.lstm(
@@ -214,7 +261,7 @@ impl RNN for LSTM {
             self.config.has_biases,
             self.config.num_layers,
             self.config.dropout,
-            self.config.train,
+            train,
             self.config.bidirectional,
             self.config.batch_first,
         );
@@ -242,7 +289,6 @@ pub struct GRU {
     flat_weights: Vec<Tensor>,
     hidden_dim: i64,
     config: RNNConfig,
-    device: Device,
 }
 
 /// Creates a new GRU layer.
@@ -270,7 +316,7 @@ pub fn gru<'a, T: Borrow<super::Path<'a>>>(
             c.bidirectional,
         );
     }
-    GRU { flat_weights, hidden_dim, config: c, device: vs.device() }
+    GRU { flat_weights, hidden_dim, config: c }
 }
 
 impl RNN for GRU {
@@ -280,24 +326,39 @@ impl RNN for GRU {
         let num_directions = if self.config.bidirectional { 2 } else { 1 };
         let layer_dim = self.config.num_layers * num_directions;
         let shape = [layer_dim, batch_dim, self.hidden_dim];
-        GRUState(Tensor::zeros(shape, (self.flat_weights[0].kind(), self.device)))
+        // Kind and device come from the weights rather than a construction-time
+        // cache so the state follows the model through e.g. vs.set_device.
+        let (kind, device) = (self.flat_weights[0].kind(), self.flat_weights[0].device());
+        GRUState(Tensor::zeros(shape, (kind, device)))
     }
 
     fn seq(&self, input: &Tensor) -> (Tensor, GRUState) {
+        self.seq_t(input, self.config.train)
+    }
+
+    fn seq_t(&self, input: &Tensor, train: bool) -> (Tensor, GRUState) {
         // The batch dimension comes second when batch_first is unset.
         let batch_dim = if self.config.batch_first { input.size_at(0) } else { input.size_at(1) };
         let state = self.zero_state(batch_dim);
-        self.seq_init(input, &state)
+        self.seq_init_t(input, &state, train)
     }
 
     fn step(&self, input: &Tensor, in_state: &GRUState) -> GRUState {
+        self.step_t(input, in_state, self.config.train)
+    }
+
+    fn step_t(&self, input: &Tensor, in_state: &GRUState, train: bool) -> GRUState {
         // Insert the singleton sequence dimension where the layout expects it.
         let input = input.unsqueeze(if self.config.batch_first { 1 } else { 0 });
-        let (_output, state) = self.seq_init(&input, in_state);
+        let (_output, state) = self.seq_init_t(&input, in_state, train);
         state
     }
 
     fn seq_init(&self, input: &Tensor, in_state: &GRUState) -> (Tensor, GRUState) {
+        self.seq_init_t(input, in_state, self.config.train)
+    }
+
+    fn seq_init_t(&self, input: &Tensor, in_state: &GRUState, train: bool) -> (Tensor, GRUState) {
         let GRUState(h) = in_state;
         let (output, h) = input.gru(
             h,
@@ -305,7 +366,7 @@ impl RNN for GRU {
             self.config.has_biases,
             self.config.num_layers,
             self.config.dropout,
-            self.config.train,
+            train,
             self.config.bidirectional,
             self.config.batch_first,
         );

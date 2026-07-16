@@ -88,6 +88,7 @@ impl std::fmt::Debug for Tensor {
 }
 
 /// Options for Tensor pretty printing
+#[derive(Clone, Copy)]
 pub struct PrinterOptions {
     precision: usize,
     threshold: usize,
@@ -439,7 +440,11 @@ fn get_summarized_data(t: &Tensor, edge_items: i64) -> Tensor {
 impl std::fmt::Display for Tensor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.defined() {
-            let po = PRINT_OPTS.lock().unwrap();
+            // Copy the options out instead of holding the lock across the
+            // whole formatting pass: a panic mid-format (e.g. in a data
+            // extraction unwrap) would otherwise poison the mutex and break
+            // every subsequent `{}` and set_print_options call.
+            let po = *PRINT_OPTS.lock().unwrap();
             let summarize = self.numel() > po.threshold;
             let basic_kind = BasicKind::for_tensor(self);
             let to_display = if summarize {

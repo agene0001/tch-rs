@@ -2,8 +2,7 @@
 //! https://github.com/facebookresearch/dinov2
 //! The weights can be extracted from pre-trained Python models
 //! using `python src/vision/export_dinov2.py`.
-// TODO: use swiglu.
-use crate::{nn, IndexOp, Kind, Tensor};
+use crate::{nn, IndexOp, Tensor};
 
 const IMG_SIZE: i64 = 518;
 const PATCH_SIZE: i64 = 14;
@@ -36,11 +35,23 @@ impl nn::Module for Attention {
             .forward(xs)
             .reshape([b, n, 3, self.num_heads, c / self.num_heads])
             .permute([2, 0, 3, 1, 4]);
-        let q = qkv.get(0) * self.scale;
+        let q = qkv.get(0);
         let k = qkv.get(1);
         let v = qkv.get(2);
-        let attn = q.matmul(&k.transpose(-2, -1)).softmax(-1, Kind::Float);
-        attn.matmul(&v).transpose(1, 2).reshape([b, n, c]).apply(&self.proj)
+        // scaled_dot_product_attention dispatches to flash/memory-efficient
+        // kernels where available instead of materializing the full
+        // [b, heads, n, n] attention matrix (n = 1370 at 518px).
+        let attn = Tensor::scaled_dot_product_attention(
+            &q,
+            &k,
+            &v,
+            None::<Tensor>,
+            0.,
+            false,
+            self.scale,
+            false,
+        );
+        attn.transpose(1, 2).reshape([b, n, c]).apply(&self.proj)
     }
 }
 
@@ -84,18 +95,63 @@ impl nn::Module for Mlp {
     }
 }
 
+/// DINOv2's SwiGLUFFNFused, used by the giant variant: a fused
+/// Linear(dim, 2*hidden) whose two halves gate each other through SiLU,
+/// followed by Linear(hidden, dim). Checkpoint keys are `mlp.w12` / `mlp.w3`.
+#[derive(Debug)]
+struct SwiGluFfn {
+    w12: nn::Linear,
+    w3: nn::Linear,
+}
+
+impl SwiGluFfn {
+    fn new(vs: nn::Path, in_features: i64, hidden_features: i64, bias: bool) -> Self {
+        // SwiGLUFFNFused shrinks the requested hidden width to 2/3 (keeping
+        // the parameter count comparable to the gated pair) and rounds up to
+        // a multiple of 8: (int(hidden * 2 / 3) + 7) // 8 * 8.
+        let hidden = (hidden_features * 2 / 3 + 7) / 8 * 8;
+        let config = nn::LinearConfig { bias, ..Default::default() };
+        let w12 = nn::linear(&vs / "w12", in_features, 2 * hidden, config);
+        let w3 = nn::linear(&vs / "w3", hidden, in_features, config);
+        Self { w12, w3 }
+    }
+}
+
+impl nn::Module for SwiGluFfn {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        let x12 = xs.apply(&self.w12);
+        let chunks = x12.chunk(2, -1);
+        (chunks[0].silu() * &chunks[1]).apply(&self.w3)
+    }
+}
+
+#[derive(Debug)]
+enum Ffn {
+    Mlp(Mlp),
+    SwiGlu(SwiGluFfn),
+}
+
+impl nn::Module for Ffn {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        match self {
+            Ffn::Mlp(m) => m.forward(xs),
+            Ffn::SwiGlu(m) => m.forward(xs),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Block {
     norm1: nn::LayerNorm,
     attn: Attention,
     ls1: LayerScale,
     norm2: nn::LayerNorm,
-    mlp: Mlp,
+    mlp: Ffn,
     ls2: LayerScale,
 }
 
 impl Block {
-    fn new(vs: nn::Path, dim: i64, num_heads: i64) -> Self {
+    fn new(vs: nn::Path, dim: i64, num_heads: i64, use_swiglu: bool) -> Self {
         // DINOv2 builds every transformer LayerNorm with eps=1e-6
         // (`partial(nn.LayerNorm, eps=1e-6)`), not tch's 1e-5 default.
         let ln_cfg = nn::LayerNormConfig { eps: 1e-6, ..Default::default() };
@@ -103,7 +159,11 @@ impl Block {
         let attn = Attention::new(&vs / "attn", dim, num_heads, true, true);
         let ls1 = LayerScale::new(&vs / "ls1", dim);
         let norm2 = nn::layer_norm(&vs / "norm2", vec![dim], ln_cfg);
-        let mlp = Mlp::new(&vs / "mlp", dim, dim * 4, true);
+        let mlp = if use_swiglu {
+            Ffn::SwiGlu(SwiGluFfn::new(&vs / "mlp", dim, dim * 4, true))
+        } else {
+            Ffn::Mlp(Mlp::new(&vs / "mlp", dim, dim * 4, true))
+        };
         let ls2 = LayerScale::new(&vs / "ls2", dim);
         Self { norm1, attn, ls1, norm2, mlp, ls2 }
     }
@@ -161,6 +221,20 @@ pub struct DinoVisionTransformer {
 
 impl DinoVisionTransformer {
     pub fn new(vs: &nn::Path, depth: usize, embed_dim: i64, num_heads: i64) -> Self {
+        Self::new_with_ffn(vs, depth, embed_dim, num_heads, false)
+    }
+
+    /// Like [`DinoVisionTransformer::new`], selecting the FFN flavor:
+    /// `use_swiglu` matches the official giant variant
+    /// (`ffn_layer="swiglufused"`, `mlp.w12`/`mlp.w3` checkpoint keys); the
+    /// small/base/large variants use the plain GELU Mlp.
+    pub fn new_with_ffn(
+        vs: &nn::Path,
+        depth: usize,
+        embed_dim: i64,
+        num_heads: i64,
+        use_swiglu: bool,
+    ) -> Self {
         let patch_embed = PatchEmbed::new(vs / "patch_embed", IMG_SIZE, PATCH_SIZE, 3, embed_dim);
         let cls_token = vs.var("cls_token", &[1, 1, embed_dim], nn::Init::Const(0.));
         let num_tokens = 1;
@@ -175,8 +249,9 @@ impl DinoVisionTransformer {
             vec![embed_dim],
             nn::LayerNormConfig { eps: 1e-6, ..Default::default() },
         );
-        let blocks =
-            (0..depth).map(|i| Block::new(vs / "blocks" / i, embed_dim, num_heads)).collect();
+        let blocks = (0..depth)
+            .map(|i| Block::new(vs / "blocks" / i, embed_dim, num_heads, use_swiglu))
+            .collect();
         Self { patch_embed, cls_token, pos_embed, blocks, norm, head }
     }
 
@@ -185,7 +260,10 @@ impl DinoVisionTransformer {
         let n = self.pos_embed.size_at(1) - 1;
         let sqrt_n = (n as f64).sqrt();
         if npatch == n && w == h {
-            return xs.shallow_clone();
+            // No interpolation needed: return the positional embedding itself
+            // (returning `xs` here would make the caller compute `xs + xs` and
+            // silently drop the pretrained positional encoding).
+            return self.pos_embed.shallow_clone();
         }
         let class_pos_embed = self.pos_embed.i((.., ..1));
         let patch_pos_embed = self.pos_embed.i((.., 1..));
@@ -237,5 +315,8 @@ pub fn vit_large(vs: &nn::Path) -> DinoVisionTransformer {
 }
 
 pub fn vit_giant(vs: &nn::Path) -> DinoVisionTransformer {
-    DinoVisionTransformer::new(vs, 40, 1536, 24)
+    // The official dinov2_vitg14 uses the fused SwiGLU FFN; with dim=1536 the
+    // fused hidden width is (4*1536 * 2/3) = 4096 (w12: 1536->8192, w3:
+    // 4096->1536), matching the released checkpoint.
+    DinoVisionTransformer::new_with_ffn(vs, 40, 1536, 24, true)
 }

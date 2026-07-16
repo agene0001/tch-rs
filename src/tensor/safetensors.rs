@@ -132,24 +132,42 @@ impl crate::Tensor {
     }
 }
 
+fn check_same_size(name: &str, src: &crate::Tensor, dst: &crate::Tensor) -> Result<(), TchError> {
+    let (src_size, dst_size) = (src.size(), dst.size());
+    if src_size != dst_size {
+        return Err(TchError::Shape(format!(
+            "cannot copy the safetensors data of shape {src_size:?} into {name} of shape {dst_size:?}"
+        )));
+    }
+    Ok(())
+}
+
 impl VarStore {
     /// Read data from safe tensor file, missing tensors will raise a error.
     pub fn read_safetensors<T: AsRef<Path>>(&self, path: T) -> Result<(), TchError> {
         let file = std::fs::read(&path).map_err(|e| wrap_err(&path, e.into()))?;
         let safetensors = SafeTensors::deserialize(&file).map_err(|e| wrap_err(&path, e))?;
-        for (name, tensor) in self.variables_.lock().unwrap().named_variables.iter_mut() {
-            let view = safetensors.tensor(name).map_err(|e| wrap_err(&path, e))?;
-            let data: Tensor = view.try_into()?;
-            // Without no_grad, copying into a trainable (requires-grad leaf)
-            // variable is rejected by autograd.
-            crate::no_grad(|| tensor.f_copy_(&data))?
-        }
-        Ok(())
+        // Without no_grad, copying into a trainable (requires-grad leaf)
+        // variable is rejected by autograd. One guard around the whole loop
+        // rather than one per variable.
+        crate::no_grad(|| -> Result<(), TchError> {
+            for (name, tensor) in self.variables_.lock().unwrap().named_variables.iter_mut() {
+                let view = safetensors.tensor(name).map_err(|e| wrap_err(&path, e))?;
+                let data: Tensor = view.try_into()?;
+                // Match the eager `load` path: an explicit shape check, as
+                // copy_ would otherwise silently broadcast a mismatched
+                // checkpoint tensor into the variable.
+                check_same_size(name, &data, tensor)?;
+                tensor.f_copy_(&data)?
+            }
+            Ok(())
+        })
     }
 
     pub fn fill_safetensors<P: AsRef<Path>>(&self, path: P) -> Result<(), TchError> {
         for (name, tensor) in Tensor::read_safetensors(path)? {
             if let Some(s) = self.variables_.lock().unwrap().named_variables.get_mut(&name) {
+                check_same_size(&name, &tensor, s)?;
                 crate::no_grad(|| s.f_copy_(&tensor))?
             }
         }

@@ -68,7 +68,14 @@ impl TchError {
     pub fn path_context(&self, path_name: &str) -> Self {
         match self {
             TchError::Torch(error) => TchError::Torch(format!("{path_name}: {error}")),
-            _ => unimplemented!(),
+            TchError::Shape(error) => TchError::Shape(format!("{path_name}: {error}")),
+            TchError::Kind(error) => TchError::Kind(format!("{path_name}: {error}")),
+            TchError::Convert(error) => TchError::Convert(format!("{path_name}: {error}")),
+            TchError::FileFormat(error) => TchError::FileFormat(format!("{path_name}: {error}")),
+            // Fall back to wrapping the rendered error rather than panicking:
+            // this is used on checkpoint-load paths where the error must be
+            // returned to the caller, not turned into an abort.
+            other => TchError::Convert(format!("{path_name}: {other}")),
         }
     }
 }

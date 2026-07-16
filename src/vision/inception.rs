@@ -162,16 +162,22 @@ fn inception_e(p: nn::Path, c_in: i64) -> impl ModuleT {
 /// Remaps ImageNet-normalized inputs to the TF (-1, 1) convention, as done by
 /// torchvision's `Inception3._transform_input` (enabled on the pretrained model).
 fn transform_input(xs: &Tensor) -> Tensor {
+    let (scale, shift) = transform_constants(xs.device(), xs.kind());
+    xs * scale + shift
+}
+
+/// The broadcastable scale/shift constants used by [`transform_input`].
+fn transform_constants(device: crate::Device, kind: crate::Kind) -> (Tensor, Tensor) {
     let scale = Tensor::from_slice(&[0.229 / 0.5, 0.224 / 0.5, 0.225 / 0.5])
         .view([3, 1, 1])
-        .to_kind(xs.kind())
-        .to_device(xs.device());
+        .to_kind(kind)
+        .to_device(device);
     let shift =
         Tensor::from_slice(&[(0.485 - 0.5) / 0.5, (0.456 - 0.5) / 0.5, (0.406 - 0.5) / 0.5])
             .view([3, 1, 1])
-            .to_kind(xs.kind())
-            .to_device(xs.device());
-    xs * scale + shift
+            .to_kind(kind)
+            .to_device(device);
+    (scale, shift)
 }
 
 /// The auxiliary classifier hanging off the middle of the network
@@ -212,7 +218,10 @@ impl Default for InceptionV3Config {
 /// training with the torchvision recipe (`loss = main + 0.4 * aux`).
 #[derive(Debug)]
 pub struct InceptionV3 {
-    transform_input: bool,
+    /// Cached transform-input constants (built once on the var-store device):
+    /// rebuilding them per forward would cost two host-to-device copies per
+    /// call on CUDA. `None` when `transform_input` is disabled.
+    transform: Option<(Tensor, Tensor)>,
     /// Stem through Mixed_6e, where the aux branch taps in.
     pre_aux: nn::SequentialT,
     /// Mixed_7a through the final linear layer.
@@ -221,11 +230,27 @@ pub struct InceptionV3 {
 }
 
 impl InceptionV3 {
+    fn apply_transform(&self, xs: &Tensor) -> Tensor {
+        match &self.transform {
+            None => xs.shallow_clone(),
+            Some((scale, shift)) => {
+                if scale.device() == xs.device() && scale.kind() == xs.kind() {
+                    xs * scale + shift
+                } else {
+                    // The input lives elsewhere than the build-time var-store
+                    // device (or in another dtype): fall back to building the
+                    // constants for it.
+                    transform_input(xs)
+                }
+            }
+        }
+    }
+
     /// Runs the forward pass, also returning the auxiliary logits when the
     /// model was built with `aux_logits` and `train` is set — mirroring
     /// torchvision, which only computes the branch in training mode.
     pub fn forward_t_with_aux(&self, xs: &Tensor, train: bool) -> (Tensor, Option<Tensor>) {
-        let xs = if self.transform_input { transform_input(xs) } else { xs.shallow_clone() };
+        let xs = self.apply_transform(xs);
         let mid = xs.apply_t(&self.pre_aux, train);
         let aux = match (&self.aux, train) {
             (Some(aux), true) => Some(mid.apply_t(aux, train)),
@@ -237,7 +262,7 @@ impl InceptionV3 {
 
 impl ModuleT for InceptionV3 {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Tensor {
-        let xs = if self.transform_input { transform_input(xs) } else { xs.shallow_clone() };
+        let xs = self.apply_transform(xs);
         xs.apply_t(&self.pre_aux, train).apply_t(&self.post_aux, train)
     }
 }
@@ -288,7 +313,10 @@ pub fn v3_with(p: &nn::Path, nclasses: i64, config: InceptionV3Config) -> Incept
             nclasses,
             nn::LinearConfig { ws_init: trunc_normal(0.1), ..Default::default() },
         ));
-    InceptionV3 { transform_input: config.transform_input, pre_aux, post_aux, aux }
+    let transform = config
+        .transform_input
+        .then(|| transform_constants(p.device(), crate::Kind::Float));
+    InceptionV3 { transform, pre_aux, post_aux, aux }
 }
 
 #[cfg(test)]

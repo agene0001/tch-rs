@@ -216,7 +216,11 @@ pub fn init(i: Init, dims: &[i64], device: Device) -> Tensor {
 impl Init {
     /// Re-initializes an existing tensor with the specified initialization
     pub fn set(self, tensor: &mut Tensor) {
-        match self {
+        // PyTorch's torch.nn.init.*_ functions all run under torch.no_grad();
+        // without the guard, re-initializing a trainable leaf variable throws
+        // "a leaf Variable that requires grad is being used in an in-place
+        // operation".
+        crate::no_grad(|| match self {
             Init::Const(cst) => {
                 let _ = tensor.fill_(cst);
             }
@@ -244,12 +248,18 @@ impl Init {
                 f_trunc_normal_(tensor, mean, stdev, lo, up).unwrap();
             }
             Init::Orthogonal { gain } => {
-                let q =
-                    f_init(Init::Orthogonal { gain }, &tensor.size(), tensor.device(), Kind::Float)
-                        .unwrap();
-                crate::no_grad(|| tensor.view_as(&q).copy_(&q));
+                // PyTorch's orthogonal_ draws and QR-factorizes in the target
+                // tensor's own dtype; keep Float for reduced-precision kinds
+                // where QR is unsupported.
+                let kind = match tensor.kind() {
+                    kind @ (Kind::Double | Kind::Float) => kind,
+                    _ => Kind::Float,
+                };
+                let q = f_init(Init::Orthogonal { gain }, &tensor.size(), tensor.device(), kind)
+                    .unwrap();
+                let _ = tensor.view_as(&q).copy_(&q);
             }
-        }
+        })
     }
 }
 

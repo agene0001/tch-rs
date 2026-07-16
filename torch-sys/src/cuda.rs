@@ -27,4 +27,16 @@ extern "C" {
 
     /// Sets CUDNN benchmark mode.
     pub fn atc_set_benchmark_cudnn(b: c_int);
+
+    /// Returns true if TF32 is allowed for cuBLAS matmuls.
+    pub fn atc_allow_tf32_cublas() -> c_int;
+
+    /// Allows or disallows TF32 for cuBLAS matmuls.
+    pub fn atc_set_allow_tf32_cublas(b: c_int);
+
+    /// Returns true if TF32 is allowed for cuDNN convolutions.
+    pub fn atc_allow_tf32_cudnn() -> c_int;
+
+    /// Allows or disallows TF32 for cuDNN convolutions.
+    pub fn atc_set_allow_tf32_cudnn(b: c_int);
 }

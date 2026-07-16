@@ -8,7 +8,17 @@
 use crate::{nn, nn::Conv2D, nn::ModuleT, Tensor};
 
 fn conv2d(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, padding: i64, stride: i64) -> Conv2D {
-    let conv2d_cfg = nn::ConvConfig { stride, padding, bias: false, ..Default::default() };
+    // torchvision initializes every DenseNet conv with kaiming_normal_ using
+    // the PyTorch defaults (mode="fan_in", a=0 leaky_relu, i.e. the same
+    // sqrt(2) gain as relu); this only affects from-scratch training
+    // (pretrained loads overwrite it).
+    let conv2d_cfg = nn::ConvConfig {
+        stride,
+        padding,
+        bias: false,
+        ws_init: nn::init::DEFAULT_KAIMING_NORMAL,
+        ..Default::default()
+    };
     nn::conv2d(p, c_in, c_out, ksize, conv2d_cfg)
 }
 
@@ -80,7 +90,14 @@ fn densenet(
         // avg_pool2d, which passed divisor_override=1 and so summed its 49-wide
         // window instead of averaging it.
         .add_fn(|xs| xs.relu().adaptive_avg_pool2d([1, 1]).flat_view())
-        .add(nn::linear(p / "classifier", nfeat, c_out, Default::default()))
+        // torchvision keeps the default Linear weight init but zeros the bias
+        // (from-scratch training only).
+        .add(nn::linear(
+            p / "classifier",
+            nfeat,
+            c_out,
+            nn::LinearConfig { bs_init: Some(nn::Init::Const(0.)), ..Default::default() },
+        ))
 }
 
 pub fn densenet121(p: &nn::Path, nclasses: i64) -> impl ModuleT {

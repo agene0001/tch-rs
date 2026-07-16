@@ -334,9 +334,9 @@ impl Tensor {
         for spec in index_spec.iter() {
             let tensor = curr_tensor.as_ref().unwrap_or(self);
             let (next_tensor, next_idx) = match spec {
-                InsertNewAxis => (Some(tensor.unsqueeze(curr_idx)), curr_idx + 1),
+                InsertNewAxis => (Some(tensor.f_unsqueeze(curr_idx)?), curr_idx + 1),
                 Select(index) => (
-                    Some(tensor.select(curr_idx, *index)),
+                    Some(tensor.f_select(curr_idx, *index)?),
                     curr_idx, // not advanced because select() squeezes dimension
                 ),
                 Narrow(start, end) => {
@@ -369,9 +369,10 @@ impl Tensor {
                 IndexSelect(index_tensor) => {
                     // Only move the index when it actually lives elsewhere.
                     let selected = if index_tensor.device() == tensor.device() {
-                        tensor.index_select(curr_idx, index_tensor)
+                        tensor.f_index_select(curr_idx, index_tensor)?
                     } else {
-                        tensor.index_select(curr_idx, &index_tensor.to_device(tensor.device()))
+                        tensor
+                            .f_index_select(curr_idx, &index_tensor.f_to_device(tensor.device())?)?
                     };
                     (Some(selected), curr_idx + 1)
                 }

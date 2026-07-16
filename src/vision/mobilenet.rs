@@ -2,6 +2,16 @@
 //! <https://ai.googleblog.com/2018/04/mobilenetv2-next-generation-of-on.htmla>
 use crate::nn::{self, ModuleT};
 
+// torchvision initializes every MobileNetV2 conv with
+// kaiming_normal_(mode="fan_out") — the default a=0 leaky_relu gain is the
+// same sqrt(2) as relu — and zeros any bias; this only affects from-scratch
+// training (pretrained loads overwrite it).
+const CONV_WS_INIT: nn::Init = nn::Init::Kaiming {
+    dist: nn::init::NormalOrUniform::Normal,
+    fan: nn::init::FanInOut::FanOut,
+    non_linearity: nn::init::NonLinearity::ReLU,
+};
+
 #[allow(clippy::identity_op)]
 // Conv2D + BatchNorm2D + ReLU6
 fn cbr(p: nn::Path, c_in: i64, c_out: i64, ks: i64, stride: i64, g: i64) -> impl ModuleT {
@@ -10,6 +20,7 @@ fn cbr(p: nn::Path, c_in: i64, c_out: i64, ks: i64, stride: i64, g: i64) -> impl
         padding: (ks - 1) / 2,
         groups: g,
         bias: false,
+        ws_init: CONV_WS_INIT,
         ..Default::default()
     };
     nn::seq_t()
@@ -30,7 +41,13 @@ fn inv(p: nn::Path, c_in: i64, c_out: i64, stride: i64, er: i64) -> impl ModuleT
     }
     conv = conv
         .add(cbr(&p / id, c_hidden, c_hidden, 3, stride, c_hidden))
-        .add(nn::conv2d(&p / (id + 1), c_hidden, c_out, 1, nn::no_bias()))
+        .add(nn::conv2d(
+            &p / (id + 1),
+            c_hidden,
+            c_out,
+            1,
+            nn::ConvConfig { bias: false, ws_init: CONV_WS_INIT, ..Default::default() },
+        ))
         .add(nn::batch_norm2d(&p / (id + 2), c_out, Default::default()));
     nn::func_t(move |xs, train| {
         let ys = xs.apply_t(&conv, train);
@@ -69,11 +86,17 @@ pub fn v2(p: &nn::Path, nclasses: i64) -> impl ModuleT {
         }
     }
     features = features.add(cbr(&f_p / layer_id, c_in, 1280, 1, 1, 1));
+    // torchvision uses normal_(0, 0.01) for the classifier weight and zeros
+    // its bias (from-scratch training only).
     let classifier = nn::seq_t().add_fn_t(|xs, train| xs.dropout(0.2, train)).add(nn::linear(
         &c_p / 1,
         1280,
         nclasses,
-        Default::default(),
+        nn::LinearConfig {
+            ws_init: nn::Init::Randn { mean: 0., stdev: 0.01 },
+            bs_init: Some(nn::Init::Const(0.)),
+            ..Default::default()
+        },
     ));
     nn::func_t(move |xs, train| {
         // Dtype-preserving pooling, matching torchvision's

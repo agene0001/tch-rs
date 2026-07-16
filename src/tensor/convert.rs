@@ -117,11 +117,12 @@ macro_rules! from_tensor {
                         numel
                     )));
                 }
+                // copy_data_as skips the `totype` round-trip when the kind
+                // already matches, and at_copy_data itself handles non-CPU
+                // and non-contiguous tensors — no need for an explicit
+                // to_device hop and its extra shallow tensor.
                 let mut vec = [$typ::ZERO; 1];
-                tensor
-                    .f_to_device(crate::Device::Cpu)?
-                    .f_to_kind($typ::KIND)?
-                    .f_copy_data(&mut vec, numel)?;
+                copy_data_as(tensor, &mut vec, numel)?;
                 Ok(vec[0])
             }
         }

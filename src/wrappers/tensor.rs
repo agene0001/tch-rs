@@ -328,6 +328,84 @@ impl Tensor {
         self.f_backward().unwrap()
     }
 
+    /// Clips the total norm of the given gradient tensors in-place, following
+    /// `torch.nn.utils.clip_grad_norm_`, and returns the total norm.
+    ///
+    /// The whole computation happens in a single FFI call using the batched
+    /// `_foreach` kernels, and the clip coefficient stays on device: no host
+    /// synchronization unless `error_if_nonfinite` is set (which must read
+    /// the norm back to raise). `norm_type` may be `f64::INFINITY`.
+    pub fn f_clip_grad_norm<T: Borrow<Tensor>>(
+        grads: &[T],
+        max_norm: f64,
+        norm_type: f64,
+        error_if_nonfinite: bool,
+    ) -> Result<Tensor, TchError> {
+        let ptrs: Vec<_> = grads.iter().map(|t| t.borrow().c_tensor).collect();
+        let c_tensor = unsafe_torch_err!(torch_sys::at_clip_grad_norm(
+            ptrs.as_ptr(),
+            ptrs.len() as c_int,
+            max_norm,
+            norm_type,
+            c_int::from(error_if_nonfinite),
+        ));
+        Ok(Tensor { c_tensor })
+    }
+
+    /// One AdamW/Adam step over a homogeneous parameter bucket (same device,
+    /// dtype, and step count) via the batched `_foreach` kernels; a single
+    /// FFI crossing. `max_exp_avg_sqs` enables amsgrad; `step` is the
+    /// post-increment step count used for the bias corrections.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn f_foreach_adam_step(
+        params: &[&Tensor],
+        grads: &[Tensor],
+        exp_avgs: &[&Tensor],
+        exp_avg_sqs: &[&Tensor],
+        max_exp_avg_sqs: Option<&[&Tensor]>,
+        step: i64,
+        lr: f64,
+        beta1: f64,
+        beta2: f64,
+        weight_decay: f64,
+        eps: f64,
+        decoupled_wd: bool,
+    ) -> Result<(), TchError> {
+        let p: Vec<_> = params.iter().map(|t| t.c_tensor).collect();
+        let g: Vec<_> = grads.iter().map(|t| t.c_tensor).collect();
+        let m: Vec<_> = exp_avgs.iter().map(|t| t.c_tensor).collect();
+        let v: Vec<_> = exp_avg_sqs.iter().map(|t| t.c_tensor).collect();
+        let vmax: Option<Vec<_>> =
+            max_exp_avg_sqs.map(|ts| ts.iter().map(|t| t.c_tensor).collect());
+        let err__ = unsafe {
+            torch_sys::at_foreach_adam_step(
+                p.as_ptr(),
+                g.as_ptr(),
+                m.as_ptr(),
+                v.as_ptr(),
+                vmax.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
+                p.len() as c_int,
+                step,
+                lr,
+                beta1,
+                beta2,
+                weight_decay,
+                eps,
+                c_int::from(decoupled_wd),
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)
+    }
+
+    /// Zeroes the given tensors (typically gradients) with a single batched
+    /// `_foreach_zero_` call.
+    pub(crate) fn f_foreach_zero(tensors: &[Tensor]) -> Result<(), TchError> {
+        let ptrs: Vec<_> = tensors.iter().map(|t| t.c_tensor).collect();
+        let err__ =
+            unsafe { torch_sys::at_foreach_zero(ptrs.as_ptr(), ptrs.len() as c_int) };
+        crate::wrappers::utils::ptr_err_to_result(err__)
+    }
+
     pub fn f_run_backward<T1, T2>(
         tensors: &[T1],
         inputs: &[T2],
@@ -486,8 +564,24 @@ impl Tensor {
 
     /// Converts some byte data to a tensor with some specified kind and shape.
     pub fn f_from_data_size(data: &[u8], size: &[i64], kind: Kind) -> Result<Tensor, TchError> {
-        let data = data.as_ptr() as *const c_void;
         let elt_size_in_bytes = kind.elt_size_in_bytes();
+        // The C side memcpys numel * elt_size bytes out of `data`, so the
+        // slice length has to be validated here: a short buffer (e.g. from a
+        // truncated .npy/.npz file) would otherwise be an out-of-bounds read.
+        let numel = size.iter().try_fold(1usize, |acc, &s| {
+            usize::try_from(s).ok().and_then(|s| acc.checked_mul(s))
+        });
+        let expected = numel.and_then(|n| n.checked_mul(elt_size_in_bytes));
+        match expected {
+            Some(expected) if data.len() >= expected => {}
+            _ => {
+                return Err(TchError::Shape(format!(
+                    "{} bytes of data do not fit a tensor of shape {size:?} and kind {kind:?}",
+                    data.len()
+                )))
+            }
+        }
+        let data = data.as_ptr() as *const c_void;
         let c_tensor = unsafe_torch_err!(at_tensor_of_data(
             data,
             size.as_ptr(),
@@ -502,7 +596,14 @@ impl Tensor {
     /// Resize operations are not allowed on this tensor without copying the data first.
     /// An empty strides slice will result in using the default strides.
     /// # Safety
-    ///   Behavior is undefined if `data` points to invalid data.
+    /// The tensor does NOT copy or take ownership of `data`:
+    /// - `data` must point to at least `numel * kind element size` bytes of
+    ///   initialized memory (per `size`/`strides`), and must remain valid for
+    ///   the whole lifetime of the returned tensor *and* of every view or
+    ///   shallow clone derived from it.
+    /// - In-place operations on the returned tensor write through `data`, so
+    ///   the buffer must not be aliased by Rust references while the tensor
+    ///   (or any derived view) is alive.
     pub unsafe fn f_from_blob(
         data: *const u8,
         size: &[i64],
@@ -528,7 +629,9 @@ impl Tensor {
     /// Resize operations are not allowed on this tensor without copying the data first.
     /// An empty strides slice will result in using the default strides.
     /// # Safety
-    ///   Behavior is undefined if `data` points to invalid data.
+    /// See [`Tensor::f_from_blob`]: `data` is not copied, must outlive the
+    /// returned tensor and all views of it, and must not be aliased while
+    /// the tensor is alive.
     pub unsafe fn from_blob(
         data: *const u8,
         size: &[i64],
@@ -552,7 +655,7 @@ impl Tensor {
 
     /// Gets the sub-tensor at the given index.
     pub fn f_get(&self, index: i64) -> Result<Tensor, TchError> {
-        let c_tensor = unsafe_torch_err!(at_get(self.c_tensor, index as c_int));
+        let c_tensor = unsafe_torch_err!(at_get(self.c_tensor, index));
         Ok(Tensor { c_tensor })
     }
 

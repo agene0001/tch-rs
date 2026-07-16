@@ -98,6 +98,32 @@ impl Cuda {
     pub fn cudnn_set_benchmark(b: bool) {
         unsafe_torch!(torch_sys::cuda::atc_set_benchmark_cudnn(i32::from(b)))
     }
+
+    /// Returns true if TF32 is allowed for cuBLAS float32 matmuls.
+    pub fn matmul_allow_tf32() -> bool {
+        unsafe_torch!(torch_sys::cuda::atc_allow_tf32_cublas()) != 0
+    }
+
+    /// Allows or disallows TF32 tensor cores for cuBLAS float32 matmuls,
+    /// mirroring `torch.backends.cuda.matmul.allow_tf32`.
+    ///
+    /// Off by default (PyTorch 1.12+). On Ampere or newer GPUs, enabling it
+    /// trades a little float32 matmul precision (inputs rounded to 10-bit
+    /// mantissas, float32 accumulation) for a large throughput win.
+    pub fn set_matmul_allow_tf32(b: bool) {
+        unsafe_torch!(torch_sys::cuda::atc_set_allow_tf32_cublas(i32::from(b)))
+    }
+
+    /// Returns true if TF32 is allowed for cuDNN float32 convolutions.
+    pub fn cudnn_allow_tf32() -> bool {
+        unsafe_torch!(torch_sys::cuda::atc_allow_tf32_cudnn()) != 0
+    }
+
+    /// Allows or disallows TF32 tensor cores for cuDNN float32 convolutions,
+    /// mirroring `torch.backends.cudnn.allow_tf32` (on by default).
+    pub fn set_cudnn_allow_tf32(b: bool) {
+        unsafe_torch!(torch_sys::cuda::atc_set_allow_tf32_cudnn(i32::from(b)))
+    }
 }
 
 impl Device {

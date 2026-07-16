@@ -111,7 +111,7 @@ impl super::module::ModuleT for BatchNorm {
                 xs.size()
             )
         }
-        if self.nd > 1 && xs.dim() != self.nd + 2 {
+        if self.nd > 1 && dim != self.nd + 2 {
             panic!(
                 "as nd={}, expected an input tensor with {} dims, got {} ({:?})",
                 self.nd,
