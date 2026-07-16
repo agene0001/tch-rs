@@ -644,38 +644,43 @@ let write_cpp funcs filename =
           pc "";
           ph "char *atg_%s(tensor *, %s);" exported_name c_typed_args_list
         | `dynamic ->
-          pc "tensor *atg_%s(%s) {" exported_name c_typed_args_list;
-          pc "  PROTECT(";
+          (* Like the other return kinds, hand the (null-terminated) tensor
+             array back through an out-parameter and return the error (or
+             nullptr) directly, avoiding the extra error-poll FFI crossing. *)
+          pc "char *atg_%s(tensor **out__, %s) {" exported_name c_typed_args_list;
+          pc "  PROTECT_ERR(";
           pc "    auto outputs__ = %s;" (Func.c_call func);
           (* the returned type is a C++ vector of tensors *)
           pc "    int sz = outputs__.size();";
           pc
-            "    torch::Tensor **out__ = (torch::Tensor**)malloc((sz + 1) * \
+            "    torch::Tensor **out = (torch::Tensor**)malloc((sz + 1) * \
              sizeof(torch::Tensor*));";
           pc "    for (int i = 0; i < sz; ++i)";
-          pc "      out__[i] = new torch::Tensor(outputs__[i]);";
-          pc "    out__[sz] = nullptr;";
-          pc "    return out__;";
+          pc "      out[i] = new torch::Tensor(outputs__[i]);";
+          pc "    out[sz] = nullptr;";
+          pc "    out__[0] = out;";
           pc "  )";
-          pc "  return nullptr;";
           pc "}";
           pc "";
-          ph "tensor *atg_%s(%s);" exported_name c_typed_args_list
+          ph "char *atg_%s(tensor **out__, %s);" exported_name c_typed_args_list
         | (`bool | `int64_t | `double) as returns ->
+          (* Like the tensor-returning ops, write the result through an
+             out-parameter and return the error (or nullptr) directly, so the
+             Rust side does not need a second FFI crossing to poll the
+             thread-local error slot after every call. *)
           let c_type =
             match returns with
             | `bool -> "int"
             | `int64_t -> "int64_t"
             | `double -> "double"
           in
-          pc "%s atg_%s(%s) {" c_type exported_name c_typed_args_list;
-          pc "  PROTECT(";
-          pc "    return %s;" (Func.c_call func);
+          pc "char *atg_%s(%s *out__, %s) {" exported_name c_type c_typed_args_list;
+          pc "  PROTECT_ERR(";
+          pc "    out__[0] = %s;" (Func.c_call func);
           pc "  )";
-          pc "  return 0;";
           pc "}";
           pc "";
-          ph "%s atg_%s(%s);" c_type exported_name c_typed_args_list);
+          ph "char *atg_%s(%s *out__, %s);" exported_name c_type c_typed_args_list);
       ph "}"))
 
 let write_fallible_wrapper funcs filename =
@@ -744,9 +749,12 @@ let write_fallible_wrapper funcs filename =
         | _ -> ());
       match func.returns with
       | `dynamic ->
-        pm "        let c_tensors = unsafe_torch_err!(";
-        pm "            atg_%s(" exported_name;
-        pm "                %s));" (Func.rust_binding_args func ~self);
+        pm "        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();";
+        pm "        let err__ = unsafe {";
+        pm "            atg_%s(&mut c_tensors," exported_name;
+        pm "                %s" (Func.rust_binding_args func ~self);
+        pm "            )};";
+        pm "        crate::wrappers::utils::ptr_err_to_result(err__)?;";
         pm "        let mut r__ = vec![];";
         pm "        let mut i = 0;";
         pm "        loop {";
@@ -784,16 +792,18 @@ let write_fallible_wrapper funcs filename =
         pm "        Ok(%s)" returns;
         pm "    }"
       | (`bool | `int64_t | `double) as returns ->
-        let is_bool =
+        let is_bool, zero =
           match returns with
-          | `bool -> true
-          | `int64_t | `double -> false
+          | `bool -> true, "0i32"
+          | `int64_t -> false, "0i64"
+          | `double -> false, "0f64"
         in
-        pm "        let return_;";
-        pm "        unsafe_torch_err!(";
-        pm "            return_ = atg_%s(" exported_name;
+        pm "        let mut return_ = %s;" zero;
+        pm "        let err__ = unsafe {";
+        pm "            atg_%s(&mut return_," exported_name;
         pm "                %s" (Func.rust_binding_args func ~self);
-        pm "            ));";
+        pm "            )};";
+        pm "        crate::wrappers::utils::ptr_err_to_result(err__)?;";
         let return_ = if is_bool then "return_ != 0" else "return_" in
         pm "        Ok(%s)" return_;
         pm "    }");
@@ -855,7 +865,7 @@ let write_ffi funcs filename =
           (Func.c_rust_args_list func)
       | `dynamic ->
         pm
-          "    pub fn atg_%s(%s) -> *mut *mut C_tensor;"
+          "    pub fn atg_%s(out__: *mut *mut *mut C_tensor, %s) -> *mut c_char;"
           exported_name
           (Func.c_rust_args_list func)
       | (`bool | `int64_t | `double) as returns ->
@@ -866,10 +876,10 @@ let write_ffi funcs filename =
           | `double -> "f64"
         in
         pm
-          "    pub fn atg_%s(%s) -> %s;"
+          "    pub fn atg_%s(out__: *mut %s, %s) -> *mut c_char;"
           exported_name
-          (Func.c_rust_args_list func)
-          rust_type);
+          rust_type
+          (Func.c_rust_args_list func));
     pm "}")
 
 let methods =

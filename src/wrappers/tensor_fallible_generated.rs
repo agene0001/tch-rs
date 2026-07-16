@@ -1789,17 +1789,19 @@ impl Tensor {
         out_dtype: impl Into<Option<Kind>>,
         transpose_result: bool,
     ) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg__cslt_sparse_mm_search(
+        let mut return_ = 0i64;
+        let err__ = unsafe {
+            atg__cslt_sparse_mm_search(
+                &mut return_,
                 compressed_a.c_tensor,
                 dense_b.c_tensor,
                 bias.as_ref().map_or(std::ptr::null_mut(), |t| t.borrow().c_tensor),
                 alpha.as_ref().map_or(std::ptr::null_mut(), |t| t.borrow().c_tensor),
                 out_dtype.into().map_or(-1, |s| s.c_int()),
-                if transpose_result { 1 } else { 0 }
+                if transpose_result { 1 } else { 0 },
             )
-        );
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -2363,8 +2365,9 @@ impl Tensor {
     }
 
     pub fn f_internal_debug_has_internal_overlap(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__debug_has_internal_overlap(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg__debug_has_internal_overlap(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -2376,14 +2379,16 @@ impl Tensor {
     }
 
     pub fn f_internal_dimi(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__dimi(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg__dimi(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
     pub fn f_internal_dimv(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__dimv(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg__dimv(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -3824,9 +3829,10 @@ impl Tensor {
         enable_gqa: bool,
     ) -> Result<i64, TchError> {
         let scale = scale.into();
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg__fused_sdp_choice(
+        let mut return_ = 0i64;
+        let err__ = unsafe {
+            atg__fused_sdp_choice(
+                &mut return_,
                 query.c_tensor,
                 key.c_tensor,
                 value.c_tensor,
@@ -3835,9 +3841,10 @@ impl Tensor {
                 if is_causal { 1 } else { 0 },
                 scale.unwrap_or(std::f64::NAN),
                 scale.is_none() as i8,
-                if enable_gqa { 1 } else { 0 }
+                if enable_gqa { 1 } else { 0 },
             )
-        );
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -3984,16 +3991,19 @@ impl Tensor {
         &self,
         from: &Tensor,
     ) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg__has_compatible_shallow_copy_type(self.c_tensor, from.c_tensor)
-        );
+        let mut return_ = 0i32;
+        let err__ = unsafe {
+            atg__has_compatible_shallow_copy_type(&mut return_, self.c_tensor, from.c_tensor)
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_internal_has_same_storage_numel(&self, other: &Tensor) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__has_same_storage_numel(self.c_tensor, other.c_tensor));
+        let mut return_ = 0i32;
+        let err__ =
+            unsafe { atg__has_same_storage_numel(&mut return_, self.c_tensor, other.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -4004,15 +4014,20 @@ impl Tensor {
         weight: Option<T>,
         density: bool,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg__histogramdd_bin_edges(
-            self.c_tensor,
-            bins.as_ptr(),
-            bins.len_i32(),
-            range.as_ptr(),
-            range.len_i32(),
-            weight.as_ref().map_or(std::ptr::null_mut(), |t| t.borrow().c_tensor),
-            if density { 1 } else { 0 }
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg__histogramdd_bin_edges(
+                &mut c_tensors,
+                self.c_tensor,
+                bins.as_ptr(),
+                bins.len_i32(),
+                range.as_ptr(),
+                range.len_i32(),
+                weight.as_ref().map_or(std::ptr::null_mut(), |t| t.borrow().c_tensor),
+                if density { 1 } else { 0 },
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -4270,8 +4285,9 @@ impl Tensor {
     }
 
     pub fn f_internal_is_zerotensor(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__is_zerotensor(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg__is_zerotensor(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -5712,8 +5728,9 @@ impl Tensor {
     }
 
     pub fn f_internal_nested_get_ragged_idx(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__nested_get_ragged_idx(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg__nested_get_ragged_idx(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -5962,8 +5979,9 @@ impl Tensor {
     }
 
     pub fn f_internal_nnpack_available() -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__nnpack_available());
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg__nnpack_available(&mut return_) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -6018,8 +6036,9 @@ impl Tensor {
     }
 
     pub fn f_internal_nnz(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__nnz(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg__nnz(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -8826,8 +8845,11 @@ impl Tensor {
     }
 
     pub fn f_internal_to_cpu<T: Borrow<Tensor>>(tensors: &[T]) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors =
-            unsafe_torch_err!(atg__to_cpu(ptr_list(tensors).as_ptr(), tensors.len() as i32));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg__to_cpu(&mut c_tensors, ptr_list(tensors).as_ptr(), tensors.len() as i32)
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -10491,18 +10513,20 @@ impl Tensor {
         target_lengths: impl IntList,
         blank: i64,
     ) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg__use_cudnn_ctc_loss(
+        let mut return_ = 0i32;
+        let err__ = unsafe {
+            atg__use_cudnn_ctc_loss(
+                &mut return_,
                 log_probs.c_tensor,
                 targets.c_tensor,
                 input_lengths.as_ptr(),
                 input_lengths.len_i32(),
                 target_lengths.as_ptr(),
                 target_lengths.len_i32(),
-                blank
+                blank,
             )
-        );
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -10513,22 +10537,25 @@ impl Tensor {
         target_lengths: &Tensor,
         blank: i64,
     ) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg__use_cudnn_ctc_loss_tensor(
+        let mut return_ = 0i32;
+        let err__ = unsafe {
+            atg__use_cudnn_ctc_loss_tensor(
+                &mut return_,
                 log_probs.c_tensor,
                 targets.c_tensor,
                 input_lengths.c_tensor,
                 target_lengths.c_tensor,
-                blank
+                blank,
             )
-        );
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_internal_use_cudnn_rnn_flatten_weight() -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__use_cudnn_rnn_flatten_weight());
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg__use_cudnn_rnn_flatten_weight(&mut return_) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -10539,18 +10566,20 @@ impl Tensor {
         target_lengths: impl IntList,
         blank: i64,
     ) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg__use_miopen_ctc_loss(
+        let mut return_ = 0i32;
+        let err__ = unsafe {
+            atg__use_miopen_ctc_loss(
+                &mut return_,
                 log_probs.c_tensor,
                 targets.c_tensor,
                 input_lengths.as_ptr(),
                 input_lengths.len_i32(),
                 target_lengths.as_ptr(),
                 target_lengths.len_i32(),
-                blank
+                blank,
             )
-        );
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -10561,16 +10590,18 @@ impl Tensor {
         target_lengths: &Tensor,
         blank: i64,
     ) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg__use_miopen_ctc_loss_tensor(
+        let mut return_ = 0i32;
+        let err__ = unsafe {
+            atg__use_miopen_ctc_loss_tensor(
+                &mut return_,
                 log_probs.c_tensor,
                 targets.c_tensor,
                 input_lengths.c_tensor,
                 target_lengths.c_tensor,
-                blank
+                blank,
             )
-        );
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -10726,8 +10757,9 @@ impl Tensor {
     }
 
     pub fn f_internal_version(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg__version(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg__version(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -11782,8 +11814,11 @@ impl Tensor {
     }
 
     pub fn f_align_tensors<T: Borrow<Tensor>>(tensors: &[T]) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors =
-            unsafe_torch_err!(atg_align_tensors(ptr_list(tensors).as_ptr(), tensors.len() as i32));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_align_tensors(&mut c_tensors, ptr_list(tensors).as_ptr(), tensors.len() as i32)
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -11879,16 +11914,18 @@ impl Tensor {
         atol: f64,
         equal_nan: bool,
     ) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(
-            return_ = atg_allclose(
+        let mut return_ = 0i32;
+        let err__ = unsafe {
+            atg_allclose(
+                &mut return_,
                 self.c_tensor,
                 other.c_tensor,
                 rtol,
                 atol,
-                if equal_nan { 1 } else { 0 }
+                if equal_nan { 1 } else { 0 },
             )
-        );
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -12738,10 +12775,15 @@ impl Tensor {
     pub fn f_atleast_1d_sequence<T: Borrow<Tensor>>(
         tensors: &[T],
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_atleast_1d_sequence(
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_atleast_1d_sequence(
+                &mut c_tensors,
+                ptr_list(tensors).as_ptr(),
+                tensors.len() as i32,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -12766,10 +12808,15 @@ impl Tensor {
     pub fn f_atleast_2d_sequence<T: Borrow<Tensor>>(
         tensors: &[T],
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_atleast_2d_sequence(
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_atleast_2d_sequence(
+                &mut c_tensors,
+                ptr_list(tensors).as_ptr(),
+                tensors.len() as i32,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -12794,10 +12841,15 @@ impl Tensor {
     pub fn f_atleast_3d_sequence<T: Borrow<Tensor>>(
         tensors: &[T],
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_atleast_3d_sequence(
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_atleast_3d_sequence(
+                &mut c_tensors,
+                ptr_list(tensors).as_ptr(),
+                tensors.len() as i32,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -14762,10 +14814,11 @@ impl Tensor {
     }
 
     pub fn f_broadcast_tensors<T: Borrow<Tensor>>(tensors: &[T]) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_broadcast_tensors(
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_broadcast_tensors(&mut c_tensors, ptr_list(tensors).as_ptr(), tensors.len() as i32)
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -14880,8 +14933,9 @@ impl Tensor {
     }
 
     pub fn f_can_cast(from_: Kind, to: Kind) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_can_cast(from_.c_int(), to.c_int()));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_can_cast(&mut return_, from_.c_int(), to.c_int()) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -15192,7 +15246,9 @@ impl Tensor {
     }
 
     pub fn f_chunk(&self, chunks: i64, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_chunk(self.c_tensor, chunks, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_chunk(&mut c_tensors, self.c_tensor, chunks, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -17453,8 +17509,9 @@ impl Tensor {
     }
 
     pub fn f_cudnn_is_acceptable(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_cudnn_is_acceptable(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_cudnn_is_acceptable(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -17701,8 +17758,9 @@ impl Tensor {
     }
 
     pub fn f_dense_dim(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_dense_dim(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg_dense_dim(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -17722,10 +17780,11 @@ impl Tensor {
     }
 
     pub fn f_dequantize_tensors<T: Borrow<Tensor>>(tensors: &[T]) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_dequantize_tensors(
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_dequantize_tensors(&mut c_tensors, ptr_list(tensors).as_ptr(), tensors.len() as i32)
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -18455,7 +18514,9 @@ impl Tensor {
     }
 
     pub fn f_dsplit(&self, sections: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_dsplit(self.c_tensor, sections));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_dsplit(&mut c_tensors, self.c_tensor, sections) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -18471,8 +18532,11 @@ impl Tensor {
     }
 
     pub fn f_dsplit_array(&self, indices: impl IntList) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors =
-            unsafe_torch_err!(atg_dsplit_array(self.c_tensor, indices.as_ptr(), indices.len_i32()));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_dsplit_array(&mut c_tensors, self.c_tensor, indices.as_ptr(), indices.len_i32())
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -19131,8 +19195,9 @@ impl Tensor {
     }
 
     pub fn f_equal(&self, other: &Tensor) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_equal(self.c_tensor, other.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_equal(&mut return_, self.c_tensor, other.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -21812,8 +21877,9 @@ impl Tensor {
     }
 
     pub fn f_get_device(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_get_device(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg_get_device(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -23061,7 +23127,9 @@ impl Tensor {
     }
 
     pub fn f_hsplit(&self, sections: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_hsplit(self.c_tensor, sections));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_hsplit(&mut c_tensors, self.c_tensor, sections) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -23077,8 +23145,11 @@ impl Tensor {
     }
 
     pub fn f_hsplit_array(&self, indices: impl IntList) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors =
-            unsafe_torch_err!(atg_hsplit_array(self.c_tensor, indices.as_ptr(), indices.len_i32()));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_hsplit_array(&mut c_tensors, self.c_tensor, indices.as_ptr(), indices.len_i32())
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -23969,86 +24040,100 @@ impl Tensor {
     }
 
     pub fn f_is_coalesced(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_coalesced(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_coalesced(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_complex(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_complex(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_complex(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_conj(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_conj(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_conj(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_distributed(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_distributed(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_distributed(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_floating_point(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_floating_point(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_floating_point(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_inference(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_inference(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_inference(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_leaf(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_leaf(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_leaf(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_neg(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_neg(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_neg(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_nonzero(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_nonzero(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_nonzero(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_pinned(&self, device: Device) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_pinned(self.c_tensor, device.c_int()));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_pinned(&mut return_, self.c_tensor, device.c_int()) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_same_size(&self, other: &Tensor) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_same_size(self.c_tensor, other.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_same_size(&mut return_, self.c_tensor, other.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_set_to(&self, tensor: &Tensor) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_set_to(self.c_tensor, tensor.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_set_to(&mut return_, self.c_tensor, tensor.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_signed(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_signed(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_signed(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
     pub fn f_is_vulkan_available() -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_is_vulkan_available());
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_is_vulkan_available(&mut return_) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -28863,8 +28948,11 @@ impl Tensor {
     }
 
     pub fn f_meshgrid<T: Borrow<Tensor>>(tensors: &[T]) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors =
-            unsafe_torch_err!(atg_meshgrid(ptr_list(tensors).as_ptr(), tensors.len() as i32));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_meshgrid(&mut c_tensors, ptr_list(tensors).as_ptr(), tensors.len() as i32)
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -28883,12 +28971,17 @@ impl Tensor {
         tensors: &[T],
         indexing: &str,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_meshgrid_indexing(
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32,
-            indexing.as_ptr(),
-            indexing.len() as i32
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_meshgrid_indexing(
+                &mut c_tensors,
+                ptr_list(tensors).as_ptr(),
+                tensors.len() as i32,
+                indexing.as_ptr(),
+                indexing.len() as i32,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -32391,7 +32484,9 @@ impl Tensor {
     }
 
     pub fn f_nonzero_numpy(&self) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_nonzero_numpy(self.c_tensor));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_nonzero_numpy(&mut c_tensors, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -32900,8 +32995,9 @@ impl Tensor {
     }
 
     pub fn f_output_nr(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_output_nr(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg_output_nr(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -33428,8 +33524,9 @@ impl Tensor {
     }
 
     pub fn f_q_per_channel_axis(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_q_per_channel_axis(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg_q_per_channel_axis(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -33466,14 +33563,16 @@ impl Tensor {
     }
 
     pub fn f_q_scale(&self) -> Result<f64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_q_scale(self.c_tensor));
+        let mut return_ = 0f64;
+        let err__ = unsafe { atg_q_scale(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
     pub fn f_q_zero_point(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_q_zero_point(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg_q_zero_point(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -33778,13 +33877,18 @@ impl Tensor {
         zero_points: &Tensor,
         dtype: Kind,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_quantize_per_tensor_tensors(
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32,
-            scales.c_tensor,
-            zero_points.c_tensor,
-            dtype.c_int()
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_quantize_per_tensor_tensors(
+                &mut c_tensors,
+                ptr_list(tensors).as_ptr(),
+                tensors.len() as i32,
+                scales.c_tensor,
+                zero_points.c_tensor,
+                dtype.c_int(),
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -35691,8 +35795,9 @@ impl Tensor {
     }
 
     pub fn f_retains_grad(&self) -> Result<bool, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_retains_grad(self.c_tensor));
+        let mut return_ = 0i32;
+        let err__ = unsafe { atg_retains_grad(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_ != 0)
     }
 
@@ -38556,8 +38661,9 @@ impl Tensor {
     }
 
     pub fn f_sparse_dim(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_sparse_dim(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg_sparse_dim(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -41080,7 +41186,9 @@ impl Tensor {
     }
 
     pub fn f_split(&self, split_size: i64, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_split(self.c_tensor, split_size, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_split(&mut c_tensors, self.c_tensor, split_size, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -41096,7 +41204,9 @@ impl Tensor {
     }
 
     pub fn f_split_copy(&self, split_size: i64, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_split_copy(self.c_tensor, split_size, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_split_copy(&mut c_tensors, self.c_tensor, split_size, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -41135,12 +41245,17 @@ impl Tensor {
         split_size: impl IntList,
         dim: i64,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_split_sizes(
-            self.c_tensor,
-            split_size.as_ptr(),
-            split_size.len_i32(),
-            dim
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_split_sizes(
+                &mut c_tensors,
+                self.c_tensor,
+                split_size.as_ptr(),
+                split_size.len_i32(),
+                dim,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -41160,12 +41275,17 @@ impl Tensor {
         split_sizes: impl IntList,
         dim: i64,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_split_with_sizes(
-            self.c_tensor,
-            split_sizes.as_ptr(),
-            split_sizes.len_i32(),
-            dim
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_split_with_sizes(
+                &mut c_tensors,
+                self.c_tensor,
+                split_sizes.as_ptr(),
+                split_sizes.len_i32(),
+                dim,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -41185,12 +41305,17 @@ impl Tensor {
         split_sizes: impl IntList,
         dim: i64,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_split_with_sizes_copy(
-            self.c_tensor,
-            split_sizes.as_ptr(),
-            split_sizes.len_i32(),
-            dim
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_split_with_sizes_copy(
+                &mut c_tensors,
+                self.c_tensor,
+                split_sizes.as_ptr(),
+                split_sizes.len_i32(),
+                dim,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -41692,8 +41817,9 @@ impl Tensor {
     }
 
     pub fn f_storage_offset(&self) -> Result<i64, TchError> {
-        let return_;
-        unsafe_torch_err!(return_ = atg_storage_offset(self.c_tensor));
+        let mut return_ = 0i64;
+        let err__ = unsafe { atg_storage_offset(&mut return_, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Ok(return_)
     }
 
@@ -42142,7 +42268,9 @@ impl Tensor {
     }
 
     pub fn f_tensor_split(&self, sections: i64, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_tensor_split(self.c_tensor, sections, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_tensor_split(&mut c_tensors, self.c_tensor, sections, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -42162,12 +42290,17 @@ impl Tensor {
         indices: impl IntList,
         dim: i64,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_tensor_split_indices(
-            self.c_tensor,
-            indices.as_ptr(),
-            indices.len_i32(),
-            dim
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_tensor_split_indices(
+                &mut c_tensors,
+                self.c_tensor,
+                indices.as_ptr(),
+                indices.len_i32(),
+                dim,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -42187,11 +42320,16 @@ impl Tensor {
         tensor_indices_or_sections: &Tensor,
         dim: i64,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_tensor_split_tensor_indices_or_sections(
-            self.c_tensor,
-            tensor_indices_or_sections.c_tensor,
-            dim
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_tensor_split_tensor_indices_or_sections(
+                &mut c_tensors,
+                self.c_tensor,
+                tensor_indices_or_sections.c_tensor,
+                dim,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -43111,7 +43249,9 @@ impl Tensor {
     }
 
     pub fn f_unbind(&self, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_unbind(self.c_tensor, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_unbind(&mut c_tensors, self.c_tensor, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -43127,7 +43267,9 @@ impl Tensor {
     }
 
     pub fn f_unbind_copy(&self, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_unbind_copy(self.c_tensor, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_unbind_copy(&mut c_tensors, self.c_tensor, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -43173,11 +43315,16 @@ impl Tensor {
         flat: &Tensor,
         tensors: &[T],
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_unflatten_dense_tensors(
-            flat.c_tensor,
-            ptr_list(tensors).as_ptr(),
-            tensors.len() as i32
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_unflatten_dense_tensors(
+                &mut c_tensors,
+                flat.c_tensor,
+                ptr_list(tensors).as_ptr(),
+                tensors.len() as i32,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -43473,7 +43620,9 @@ impl Tensor {
     }
 
     pub fn f_unsafe_chunk(&self, chunks: i64, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_unsafe_chunk(self.c_tensor, chunks, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_unsafe_chunk(&mut c_tensors, self.c_tensor, chunks, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -43489,7 +43638,9 @@ impl Tensor {
     }
 
     pub fn f_unsafe_split(&self, split_size: i64, dim: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_unsafe_split(self.c_tensor, split_size, dim));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_unsafe_split(&mut c_tensors, self.c_tensor, split_size, dim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -43528,12 +43679,17 @@ impl Tensor {
         split_sizes: impl IntList,
         dim: i64,
     ) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_unsafe_split_with_sizes(
-            self.c_tensor,
-            split_sizes.as_ptr(),
-            split_sizes.len_i32(),
-            dim
-        ));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_unsafe_split_with_sizes(
+                &mut c_tensors,
+                self.c_tensor,
+                split_sizes.as_ptr(),
+                split_sizes.len_i32(),
+                dim,
+            )
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -44975,7 +45131,9 @@ impl Tensor {
     }
 
     pub fn f_vsplit(&self, sections: i64) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_vsplit(self.c_tensor, sections));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_vsplit(&mut c_tensors, self.c_tensor, sections) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -44991,8 +45149,11 @@ impl Tensor {
     }
 
     pub fn f_vsplit_array(&self, indices: impl IntList) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors =
-            unsafe_torch_err!(atg_vsplit_array(self.c_tensor, indices.as_ptr(), indices.len_i32()));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe {
+            atg_vsplit_array(&mut c_tensors, self.c_tensor, indices.as_ptr(), indices.len_i32())
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
@@ -45034,7 +45195,9 @@ impl Tensor {
     }
 
     pub fn f_where_(condition: &Tensor) -> Result<Vec<Tensor>, TchError> {
-        let c_tensors = unsafe_torch_err!(atg_where(condition.c_tensor));
+        let mut c_tensors: *mut *mut C_tensor = std::ptr::null_mut();
+        let err__ = unsafe { atg_where(&mut c_tensors, condition.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         let mut r__ = vec![];
         let mut i = 0;
         loop {
