@@ -4,7 +4,7 @@
 //! <https://openreview.net/forum?id=TVHS5Y4dNvM>
 use crate::nn;
 
-fn block(p: nn::Path, dim: i64, kernel_size: i64) -> impl nn::ModuleT {
+fn block(p: nn::Path, dim: i64, kernel_size: i64) -> impl nn::ModuleT + use<> {
     // With stride 1 and an odd kernel, PyTorch's padding="same" is exactly the
     // symmetric static padding k / 2 — no need for the dynamic zero_pad2d copy
     // that conv2d_same performs on every forward.

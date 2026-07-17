@@ -2,7 +2,7 @@
 name = "torch-sys"
 version = "0.25.0"
 authors = ["Laurent Mazare <lmazare@gmail.com>"]
-edition = "2021"
+edition = "2024"
 build = "build.rs"
 links = "tch"
 
@@ -18,10 +18,10 @@ libc = "0.2.0"
 [build-dependencies]
 anyhow = "^1.0.60"
 cc = "1.2"
-ureq = { version = "2.6", optional = true, features = ["json"] }
+ureq = { version = "3.3.0", optional = true, features = ["json"] }
 serde_json = { version = "1.0", optional = true }
 serde = { version = "1.0", optional = true, features = ["derive"] }
-zip = "0.6"
+zip = "8.6.0"
 
 [features]
 download-libtorch = ["ureq", "serde", "serde_json"]

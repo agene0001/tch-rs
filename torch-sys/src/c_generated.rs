@@ -3,7 +3,7 @@
 use crate::C_tensor;
 use libc::{c_char, c_int};
 
-extern "C" {
+unsafe extern "C" {
     pub fn atg___and__(
         out__: *mut *mut C_tensor,
         self_: *mut C_tensor,
@@ -4641,16 +4641,6 @@ extern "C" {
         out_: *mut C_tensor,
         self_: *mut C_tensor,
     ) -> *mut c_char;
-    pub fn atg_align_as(
-        out__: *mut *mut C_tensor,
-        self_: *mut C_tensor,
-        other_: *mut C_tensor,
-    ) -> *mut c_char;
-    pub fn atg_align_tensors(
-        out__: *mut *mut *mut C_tensor,
-        tensors_data: *const *mut C_tensor,
-        tensors_len: c_int,
-    ) -> *mut c_char;
     pub fn atg_all(out__: *mut *mut C_tensor, self_: *mut C_tensor) -> *mut c_char;
     pub fn atg_all_all_out(
         out__: *mut *mut C_tensor,
@@ -5443,7 +5433,7 @@ extern "C" {
         p_: f64,
     ) -> *mut c_char;
     pub fn atg_bernoulli_p(out__: *mut *mut C_tensor, self_: *mut C_tensor, p_: f64)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_bernoulli_tensor(
         out__: *mut *mut C_tensor,
         self_: *mut C_tensor,
@@ -7108,7 +7098,7 @@ extern "C" {
         self_: *mut C_tensor,
     ) -> *mut c_char;
     pub fn atg_diag(out__: *mut *mut C_tensor, self_: *mut C_tensor, diagonal_: i64)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_diag_embed(
         out__: *mut *mut C_tensor,
         self_: *mut C_tensor,
@@ -7682,7 +7672,7 @@ extern "C" {
         other_: *mut C_tensor,
     ) -> *mut c_char;
     pub fn atg_equal(out__: *mut c_int, self_: *mut C_tensor, other_: *mut C_tensor)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_erf(out__: *mut *mut C_tensor, self_: *mut C_tensor) -> *mut c_char;
     pub fn atg_erf_(out__: *mut *mut C_tensor, self_: *mut C_tensor) -> *mut c_char;
     pub fn atg_erf_out(
@@ -13696,7 +13686,7 @@ extern "C" {
     ) -> *mut c_char;
     pub fn atg_q_per_channel_axis(out__: *mut i64, self_: *mut C_tensor) -> *mut c_char;
     pub fn atg_q_per_channel_scales(out__: *mut *mut C_tensor, self_: *mut C_tensor)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_q_per_channel_scales_out(
         out__: *mut *mut C_tensor,
         out_: *mut C_tensor,
@@ -14188,7 +14178,7 @@ extern "C" {
     ) -> *mut c_char;
     pub fn atg_random_to(out__: *mut *mut C_tensor, self_: *mut C_tensor, to_: i64) -> *mut c_char;
     pub fn atg_random_to_(out__: *mut *mut C_tensor, self_: *mut C_tensor, to_: i64)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_random_to_out(
         out__: *mut *mut C_tensor,
         out_: *mut C_tensor,
@@ -14202,7 +14192,7 @@ extern "C" {
         options_device: c_int,
     ) -> *mut c_char;
     pub fn atg_randperm_out(out__: *mut *mut C_tensor, out_: *mut C_tensor, n_: i64)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_range(
         out__: *mut *mut C_tensor,
         start_d: f64,
@@ -17561,7 +17551,7 @@ extern "C" {
         unitriangular_: c_int,
     ) -> *mut c_char;
     pub fn atg_tril(out__: *mut *mut C_tensor, self_: *mut C_tensor, diagonal_: i64)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_tril_(
         out__: *mut *mut C_tensor,
         self_: *mut C_tensor,
@@ -17600,7 +17590,7 @@ extern "C" {
         reduction_: i64,
     ) -> *mut c_char;
     pub fn atg_triu(out__: *mut *mut C_tensor, self_: *mut C_tensor, diagonal_: i64)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_triu_(
         out__: *mut *mut C_tensor,
         self_: *mut C_tensor,
@@ -17848,7 +17838,7 @@ extern "C" {
         dim_: i64,
     ) -> *mut c_char;
     pub fn atg_unsqueeze(out__: *mut *mut C_tensor, self_: *mut C_tensor, dim_: i64)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_unsqueeze_(
         out__: *mut *mut C_tensor,
         self_: *mut C_tensor,
@@ -18407,7 +18397,7 @@ extern "C" {
     ) -> *mut c_char;
     pub fn atg_view_as_complex(out__: *mut *mut C_tensor, self_: *mut C_tensor) -> *mut c_char;
     pub fn atg_view_as_complex_copy(out__: *mut *mut C_tensor, self_: *mut C_tensor)
-        -> *mut c_char;
+    -> *mut c_char;
     pub fn atg_view_as_complex_copy_out(
         out__: *mut *mut C_tensor,
         out_: *mut C_tensor,

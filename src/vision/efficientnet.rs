@@ -323,28 +323,28 @@ fn bn_b5_to_b7() -> nn::BatchNormConfig {
     nn::BatchNormConfig { eps: 1e-3, momentum: 0.01, ..Default::default() }
 }
 
-pub fn b0(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b0(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b0(), 0.2, Default::default(), nclasses)
 }
-pub fn b1(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b1(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b1(), 0.2, Default::default(), nclasses)
 }
-pub fn b2(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b2(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b2(), 0.3, Default::default(), nclasses)
 }
-pub fn b3(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b3(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b3(), 0.3, Default::default(), nclasses)
 }
-pub fn b4(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b4(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b4(), 0.4, Default::default(), nclasses)
 }
-pub fn b5(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b5(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b5(), 0.4, bn_b5_to_b7(), nclasses)
 }
-pub fn b6(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b6(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b6(), 0.5, bn_b5_to_b7(), nclasses)
 }
-pub fn b7(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn b7(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     EfficientNet::new(p, MBConvConfig::b7(), 0.5, bn_b5_to_b7(), nclasses)
 }
 

@@ -1,6 +1,6 @@
 use libc::c_int;
 
-extern "C" {
+unsafe extern "C" {
     /// Returns the number of CUDA devices available.
     pub fn atc_cuda_device_count() -> c_int;
 

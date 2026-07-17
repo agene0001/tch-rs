@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
-const TORCH_VERSION: &str = "2.12.0";
+const TORCH_VERSION: &str = "2.13.0";
 const PYTHON_PRINT_PYTORCH_DETAILS: &str = r"
 import torch
 from torch.utils import cpp_extension
@@ -65,12 +65,13 @@ struct SystemInfo {
 fn download<P: AsRef<Path>>(source_url: &str, target_file: P) -> anyhow::Result<()> {
     let f = fs::File::create(&target_file)?;
     let mut writer = io::BufWriter::new(f);
-    let response = ureq::get(source_url).call()?;
+    let mut response = ureq::get(source_url).call()?;
     let response_code = response.status();
     if response_code != 200 {
         anyhow::bail!("Unexpected response code {} for {}", response_code, source_url)
     }
-    let mut reader = response.into_reader();
+    // libtorch archives are multi-GB: lift ureq 3's default 10MB body cap.
+    let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
     std::io::copy(&mut reader, &mut writer)?;
     Ok(())
 }
@@ -99,14 +100,15 @@ struct PyPiPackage {
 #[cfg(feature = "download-libtorch")]
 fn get_pypi_wheel_url_for_aarch64_macosx() -> anyhow::Result<String> {
     let pypi_url = format!("https://pypi.org/pypi/torch/{TORCH_VERSION}/json");
-    let response = ureq::get(pypi_url.as_str()).call()?;
+    let mut response = ureq::get(pypi_url.as_str()).call()?;
     let response_code = response.status();
     if response_code != 200 {
         anyhow::bail!("Unexpected response code {} for {}", response_code, pypi_url)
     }
-    let pypi_package: PyPiPackage = response.into_json()?;
+    // The pypi metadata json is a few MB; the default body limit is plenty.
+    let pypi_package: PyPiPackage = response.body_mut().read_json()?;
     let urls = pypi_package.urls;
-    let expected_filename = format!("torch-{TORCH_VERSION}-cp311-none-macosx_11_0_arm64.whl");
+    let expected_filename = format!("torch-{TORCH_VERSION}-cp312-cp312-macosx_14_0_arm64.whl");
     let url = urls.iter().find_map(|pypi_url: &PyPiPackageUrl| {
         if pypi_url.filename == expected_filename {
             Some(pypi_url.url.clone())
@@ -123,7 +125,12 @@ fn extract<P: AsRef<Path>>(filename: P, outpath: P) -> anyhow::Result<()> {
     let mut archive = zip::ZipArchive::new(buf)?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let outpath = outpath.as_ref().join(file.mangled_name());
+        // enclosed_name is zip 1.0+'s safe replacement for mangled_name; it
+        // rejects entries that would escape the extraction directory.
+        let Some(enclosed_name) = file.enclosed_name() else {
+            anyhow::bail!("cannot extract file with unsafe path {:?}", file.name());
+        };
+        let outpath = outpath.as_ref().join(enclosed_name);
         if !file.name().ends_with('/') {
             println!(
                 "File {} extracted to \"{}\" ({} bytes)",
@@ -158,7 +165,7 @@ fn version_check(version: &str) -> Result<()> {
         return Ok(());
     }
     let version = version.trim();
-    // Typical version number is 2.12.0+cpu or 2.12.0+cu129
+    // Typical version number is 2.13.0+cpu or 2.13.0+cu130
     let version = match version.split_once('+') {
         None => version,
         Some((version, _)) => version,
@@ -312,11 +319,10 @@ impl SystemInfo {
                     "https://download.pytorch.org/libtorch/{}/libtorch-shared-with-deps-{}{}.zip",
                     device, TORCH_VERSION, match device.as_ref() {
                         "cpu" => "%2Bcpu",
-                        "cu118" => "%2Bcu118",
-                        "cu121" => "%2Bcu121",
-                        "cu124" => "%2Bcu124",
+                        // Flavors published for this libtorch release; older cu1xx
+                        // builds are not available for 2.13.0.
                         "cu126" => "%2Bcu126",
-                        "cu128" => "%2Bcu128",
+                        "cu130" => "%2Bcu130",
                         _ => anyhow::bail!("unsupported device {device}, TORCH_CUDA_VERSION may be set incorrectly?"),
                     }
                 ),
@@ -338,11 +344,10 @@ impl SystemInfo {
                     "https://download.pytorch.org/libtorch/{}/libtorch-win-shared-with-deps-{}{}.zip",
                     device, TORCH_VERSION, match device.as_ref() {
                         "cpu" => "%2Bcpu",
-                        "cu118" => "%2Bcu118",
-                        "cu121" => "%2Bcu121",
-                        "cu124" => "%2Bcu124",
+                        // Flavors published for this libtorch release; older cu1xx
+                        // builds are not available for 2.13.0.
                         "cu126" => "%2Bcu126",
-                        "cu128" => "%2Bcu128",
+                        "cu130" => "%2Bcu130",
                         _ => ""
                     }),
             };

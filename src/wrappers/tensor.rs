@@ -53,7 +53,8 @@ impl Tensor {
     /// this pointer to remain valid for the whole lifetime of the Rust
     /// object.
     pub unsafe fn clone_from_ptr(c_tensor: *mut C_tensor) -> Self {
-        let c_tensor = at_shallow_clone(c_tensor);
+        // SAFETY: the caller guarantees `c_tensor` points to a valid tensor.
+        let c_tensor = unsafe { at_shallow_clone(c_tensor) };
         crate::wrappers::utils::read_and_clean_error().unwrap();
         Self { c_tensor }
     }
@@ -639,7 +640,8 @@ impl Tensor {
         kind: Kind,
         device: Device,
     ) -> Tensor {
-        Self::f_from_blob(data, size, strides, kind, device).unwrap()
+        // SAFETY: forwarded to the caller, see f_from_blob's contract.
+        unsafe { Self::f_from_blob(data, size, strides, kind, device) }.unwrap()
     }
 
     /// Converts some byte data to a tensor with some specified kind and shape.

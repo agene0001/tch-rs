@@ -3,7 +3,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 pub trait ReadStream: Read + Seek {}
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn tch_write_stream_destructor(stream_ptr: *mut c_void) {
     unsafe {
         let boxed_stream: Box<Box<dyn Write>> = Box::from_raw(stream_ptr as *mut Box<dyn Write>);
@@ -11,7 +11,7 @@ extern "C" fn tch_write_stream_destructor(stream_ptr: *mut c_void) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn tch_write_stream_write(
     stream_ptr: *mut c_void,
     buf: *const u8,
@@ -31,7 +31,7 @@ extern "C" fn tch_write_stream_write(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn tch_read_stream_destructor(stream_ptr: *mut c_void) {
     unsafe {
         let boxed_stream: Box<Box<dyn ReadStream>> =
@@ -40,7 +40,7 @@ extern "C" fn tch_read_stream_destructor(stream_ptr: *mut c_void) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn tch_read_stream_stream_position(stream_ptr: *mut c_void, current: *mut u64) -> bool {
     unsafe {
         let boxed_stream = stream_ptr as *mut Box<dyn ReadStream>;
@@ -54,7 +54,7 @@ extern "C" fn tch_read_stream_stream_position(stream_ptr: *mut c_void, current: 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn tch_read_stream_seek_start(
     stream_ptr: *mut c_void,
     pos: u64,
@@ -72,7 +72,7 @@ extern "C" fn tch_read_stream_seek_start(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn tch_read_stream_seek_end(
     stream_ptr: *mut c_void,
     pos: i64,
@@ -90,7 +90,7 @@ extern "C" fn tch_read_stream_seek_end(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn tch_read_stream_read(
     stream_ptr: *mut c_void,
     buf: *mut u8,

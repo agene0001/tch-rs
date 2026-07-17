@@ -14,7 +14,7 @@ const CONV_WS_INIT: nn::Init = nn::Init::Kaiming {
 
 #[allow(clippy::identity_op)]
 // Conv2D + BatchNorm2D + ReLU6
-fn cbr(p: nn::Path, c_in: i64, c_out: i64, ks: i64, stride: i64, g: i64) -> impl ModuleT {
+fn cbr(p: nn::Path, c_in: i64, c_out: i64, ks: i64, stride: i64, g: i64) -> impl ModuleT + use<> {
     let conv2d = nn::ConvConfig {
         stride,
         padding: (ks - 1) / 2,
@@ -31,7 +31,7 @@ fn cbr(p: nn::Path, c_in: i64, c_out: i64, ks: i64, stride: i64, g: i64) -> impl
 }
 
 // Inverted Residual block.
-fn inv(p: nn::Path, c_in: i64, c_out: i64, stride: i64, er: i64) -> impl ModuleT {
+fn inv(p: nn::Path, c_in: i64, c_out: i64, stride: i64, er: i64) -> impl ModuleT + use<> {
     let c_hidden = er * c_in;
     let mut conv = nn::seq_t();
     let mut id = 0;
@@ -70,7 +70,7 @@ const INVERTED_RESIDUAL_SETTINGS: [(i64, i64, i64, i64); 7] = [
 ];
 
 #[allow(clippy::identity_op)]
-pub fn v2(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn v2(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     let f_p = p / "features";
     let c_p = p / "classifier";
     let mut c_in = 32;

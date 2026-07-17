@@ -4293,25 +4293,6 @@ char *atg_alias_copy_out(tensor *out__, tensor out, tensor self) {
   )
 }
 
-char *atg_align_as(tensor *out__, tensor self, tensor other) {
-  PROTECT_ERR(
-    auto outputs__ = self->align_as(*other);
-    out__[0] = new torch::Tensor(outputs__);
-  )
-}
-
-char *atg_align_tensors(tensor **out__, tensor *tensors_data, int tensors_len) {
-  PROTECT_ERR(
-    auto outputs__ = torch::align_tensors(of_carray_tensor(tensors_data, tensors_len));
-    int sz = outputs__.size();
-    torch::Tensor **out = (torch::Tensor**)malloc((sz + 1) * sizeof(torch::Tensor*));
-    for (int i = 0; i < sz; ++i)
-      out[i] = new torch::Tensor(outputs__[i]);
-    out[sz] = nullptr;
-    out__[0] = out;
-  )
-}
-
 char *atg_all(tensor *out__, tensor self) {
   PROTECT_ERR(
     auto outputs__ = torch::all(*self);

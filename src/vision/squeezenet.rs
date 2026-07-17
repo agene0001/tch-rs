@@ -23,7 +23,7 @@ fn conv_cfg(padding: i64, stride: i64) -> nn::ConvConfig {
     }
 }
 
-fn fire(p: nn::Path, c_in: i64, c_squeeze: i64, c_exp1: i64, c_exp3: i64) -> impl Module {
+fn fire(p: nn::Path, c_in: i64, c_squeeze: i64, c_exp1: i64, c_exp3: i64) -> impl Module + use<> {
     let squeeze = nn::conv2d(&p / "squeeze", c_in, c_squeeze, 1, conv_cfg(0, 1));
     let exp1 = nn::conv2d(&p / "expand1x1", c_squeeze, c_exp1, 1, conv_cfg(0, 1));
     let exp3 = nn::conv2d(&p / "expand3x3", c_squeeze, c_exp3, 3, conv_cfg(1, 1));
@@ -33,7 +33,7 @@ fn fire(p: nn::Path, c_in: i64, c_squeeze: i64, c_exp1: i64, c_exp3: i64) -> imp
     })
 }
 
-fn squeezenet(p: &nn::Path, v1_0: bool, nclasses: i64) -> impl ModuleT {
+fn squeezenet(p: &nn::Path, v1_0: bool, nclasses: i64) -> impl ModuleT + use<> {
     let f_p = p / "features";
     let c_p = p / "classifier";
     let initial_conv_cfg = conv_cfg(0, 2);
@@ -80,10 +80,10 @@ fn squeezenet(p: &nn::Path, v1_0: bool, nclasses: i64) -> impl ModuleT {
         .add_fn(|xs| xs.relu().adaptive_avg_pool2d([1, 1]).flat_view())
 }
 
-pub fn v1_0(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn v1_0(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     squeezenet(p, true, nclasses)
 }
 
-pub fn v1_1(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn v1_1(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     squeezenet(p, false, nclasses)
 }

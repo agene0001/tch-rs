@@ -22,7 +22,7 @@ fn conv2d(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, padding: i64, stride: 
     nn::conv2d(p, c_in, c_out, ksize, conv2d_cfg)
 }
 
-fn dense_layer(p: nn::Path, c_in: i64, bn_size: i64, growth: i64) -> impl ModuleT {
+fn dense_layer(p: nn::Path, c_in: i64, bn_size: i64, growth: i64) -> impl ModuleT + use<> {
     let c_inter = bn_size * growth;
     let bn1 = nn::batch_norm2d(&p / "norm1", c_in, Default::default());
     let conv1 = conv2d(&p / "conv1", c_in, c_inter, 1, 0, 1);
@@ -35,7 +35,7 @@ fn dense_layer(p: nn::Path, c_in: i64, bn_size: i64, growth: i64) -> impl Module
     })
 }
 
-fn dense_block(p: nn::Path, c_in: i64, bn_size: i64, growth: i64, nlayers: i64) -> impl ModuleT {
+fn dense_block(p: nn::Path, c_in: i64, bn_size: i64, growth: i64, nlayers: i64) -> impl ModuleT + use<> {
     let mut seq = nn::seq_t();
     for i in 0..nlayers {
         seq = seq.add(dense_layer(
@@ -48,7 +48,7 @@ fn dense_block(p: nn::Path, c_in: i64, bn_size: i64, growth: i64, nlayers: i64) 
     seq
 }
 
-fn transition(p: nn::Path, c_in: i64, c_out: i64) -> impl ModuleT {
+fn transition(p: nn::Path, c_in: i64, c_out: i64) -> impl ModuleT + use<> {
     nn::seq_t()
         .add(nn::batch_norm2d(&p / "norm", c_in, Default::default()))
         .add_fn(|xs| xs.relu())
@@ -63,7 +63,7 @@ fn densenet(
     growth: i64,
     block_config: &[i64],
     c_out: i64,
-) -> impl ModuleT {
+) -> impl ModuleT + use<> {
     let fp = p / "features";
     let mut seq = nn::seq_t()
         .add(conv2d(&fp / "conv0", 3, c_in, 7, 3, 2))
@@ -100,18 +100,18 @@ fn densenet(
         ))
 }
 
-pub fn densenet121(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn densenet121(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     densenet(p, 64, 4, 32, &[6, 12, 24, 16], nclasses)
 }
 
-pub fn densenet161(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn densenet161(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     densenet(p, 96, 4, 48, &[6, 12, 36, 24], nclasses)
 }
 
-pub fn densenet169(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn densenet169(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     densenet(p, 64, 4, 32, &[6, 12, 32, 32], nclasses)
 }
 
-pub fn densenet201(p: &nn::Path, nclasses: i64) -> impl ModuleT {
+pub fn densenet201(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
     densenet(p, 64, 4, 32, &[6, 12, 48, 32], nclasses)
 }

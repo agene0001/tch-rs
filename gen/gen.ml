@@ -850,7 +850,7 @@ let write_ffi funcs filename =
     pm "use crate::C_tensor;";
     pm "use libc::{c_char, c_int};";
     pm "";
-    pm "extern \"C\" {";
+    pm "unsafe extern \"C\" {";
     Map.iteri funcs ~f:(fun ~key:exported_name ~data:func ->
       match func.Func.returns with
       | `nothing ->
@@ -947,7 +947,7 @@ let run
 
 let () =
   run
-    ~yaml_filename:"third_party/pytorch/Declarations-v2.12.0.yaml"
+    ~yaml_filename:"third_party/pytorch/Declarations-v2.13.0.yaml"
     ~cpp_filename:"torch-sys/libtch/torch_api_generated"
     ~ffi_filename:"torch-sys/src/c_generated.rs"
     ~wrapper_filename:"src/wrappers/tensor_generated.rs"

@@ -12,7 +12,7 @@ pub struct C_scalar {
     _private: [u8; 0],
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn ats_int(v: i64) -> *mut C_scalar;
     pub fn ats_float(v: f64) -> *mut C_scalar;
     pub fn ats_to_int(arg: *mut C_scalar) -> i64;
@@ -26,7 +26,7 @@ pub struct C_tensor {
     _private: [u8; 0],
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn at_new_tensor() -> *mut C_tensor;
     pub fn at_shallow_clone(arg: *mut C_tensor) -> *mut C_tensor;
     pub fn at_copy_(dst: *mut C_tensor, src: *mut C_tensor);
@@ -190,7 +190,7 @@ extern "C" {
 
 pub mod c_generated;
 
-extern "C" {
+unsafe extern "C" {
     pub fn get_and_reset_last_err() -> *mut c_char;
 }
 
@@ -199,7 +199,7 @@ pub struct C_optimizer {
     _private: [u8; 0],
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn ato_adam(
         lr: f64,
         beta1: f64,
@@ -261,7 +261,7 @@ pub struct CModule_ {
     _private: [u8; 0],
 }
 
-extern "C" {
+unsafe extern "C" {
     // Constructors
     pub fn ati_none() -> *mut CIValue;
     pub fn ati_bool(b: c_int) -> *mut CIValue;
