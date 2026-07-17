@@ -405,7 +405,9 @@ impl SystemInfo {
                     .opt_level(2)
                     .includes(&self.libtorch_include_dirs)
                     .flag(format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
-                    .flag("-std=c++17")
+                    // libtorch 2.13 headers require C++20 (designated
+                    // initializers, default member init for bit-fields).
+                    .flag("-std=c++20")
                     .flag(format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi))
                     .flag("-DGLOG_USE_GLOG_EXPORT")
                     .files(&c_files)
@@ -423,7 +425,15 @@ impl SystemInfo {
                     // FFI glue optimized even under debug cargo profiles.
                     .opt_level(2)
                     .includes(&self.libtorch_include_dirs)
-                    .flag("/std:c++17")
+                    // libtorch 2.13 headers require C++20 (designated
+                    // initializers, default member init for bit-fields).
+                    .flag("/std:c++20")
+                    // The PROTECT wrappers catch C++ exceptions on every FFI
+                    // call; without /EHsc MSVC does not guarantee unwinding.
+                    .flag("/EHsc")
+                    // torch_api_generated.cpp exceeds the default COFF
+                    // section limit under C++20.
+                    .flag("/bigobj")
                     .flag("/DGLOG_USE_GLOG_EXPORT")
                     .files(&c_files)
                     .compile("tch");

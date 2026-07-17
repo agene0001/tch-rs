@@ -39,7 +39,7 @@ impl Cuda {
         // even if unlucky CGU partitioning strands the static in an otherwise
         // unreferenced object file.
         #[cfg(all(target_os = "windows", use_cuda))]
-        std::hint::black_box(torch_sys::dummy_cuda_dependency as usize);
+        std::hint::black_box(torch_sys::dummy_cuda_dependency as *const ());
         static IS_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *IS_AVAILABLE
             .get_or_init(|| unsafe_torch!(torch_sys::cuda::atc_cuda_is_available()) != 0)

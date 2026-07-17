@@ -288,7 +288,7 @@ char *atg__nested_view_from_jagged_copy(tensor *, tensor self, tensor offsets, t
 char *atg__nested_view_from_jagged_copy_out(tensor *, tensor out, tensor self, tensor offsets, tensor dummy, tensor lengths, int64_t ragged_idx, tensor min_seqlen, tensor max_seqlen);
 char *atg__new_zeros_with_same_feature_meta(tensor *, tensor self, tensor other, int64_t self_num_batch_dims);
 char *atg__new_zeros_with_same_feature_meta_out(tensor *, tensor out, tensor self, tensor other, int64_t self_num_batch_dims);
-char *atg__nnpack_available(int *out__, );
+char *atg__nnpack_available(int *out__);
 char *atg__nnpack_spatial_convolution(tensor *, tensor input, tensor weight, tensor bias, int64_t *padding_data, int padding_len, int64_t *stride_data, int stride_len);
 char *atg__nnpack_spatial_convolution_out(tensor *, tensor out, tensor input, tensor weight, tensor bias, int64_t *padding_data, int padding_len, int64_t *stride_data, int stride_len);
 char *atg__nnz(int64_t *out__, tensor self);
@@ -507,7 +507,7 @@ char *atg__upsample_nearest_exact3d_out(tensor *, tensor out, tensor self, int64
 char *atg__upsample_nearest_exact3d_vec(tensor *, tensor input, int64_t *output_size_data, int output_size_len, double *scale_factors_data, int scale_factors_len);
 char *atg__use_cudnn_ctc_loss(int *out__, tensor log_probs, tensor targets, int64_t *input_lengths_data, int input_lengths_len, int64_t *target_lengths_data, int target_lengths_len, int64_t blank);
 char *atg__use_cudnn_ctc_loss_tensor(int *out__, tensor log_probs, tensor targets, tensor input_lengths, tensor target_lengths, int64_t blank);
-char *atg__use_cudnn_rnn_flatten_weight(int *out__, );
+char *atg__use_cudnn_rnn_flatten_weight(int *out__);
 char *atg__use_miopen_ctc_loss(int *out__, tensor log_probs, tensor targets, int64_t *input_lengths_data, int input_lengths_len, int64_t *target_lengths_data, int target_lengths_len, int64_t blank);
 char *atg__use_miopen_ctc_loss_tensor(int *out__, tensor log_probs, tensor targets, tensor input_lengths, tensor target_lengths, int64_t blank);
 char *atg__validate_compressed_sparse_indices(int is_crow, tensor compressed_idx, tensor plain_idx, int64_t cdim, int64_t dim, int64_t nnz);
@@ -1367,7 +1367,7 @@ char *atg_is_pinned(int *out__, tensor self, int device);
 char *atg_is_same_size(int *out__, tensor self, tensor other);
 char *atg_is_set_to(int *out__, tensor self, tensor tensor);
 char *atg_is_signed(int *out__, tensor self);
-char *atg_is_vulkan_available(int *out__, );
+char *atg_is_vulkan_available(int *out__);
 char *atg_isclose(tensor *, tensor self, tensor other, double rtol, double atol, int equal_nan);
 char *atg_isfinite(tensor *, tensor self);
 char *atg_isin(tensor *, tensor elements, tensor test_elements, int assume_unique, int invert);

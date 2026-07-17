@@ -12,11 +12,13 @@ extern "C" {
 typedef torch::Tensor *tensor;
 typedef torch::Scalar *scalar;
 typedef torch::optim::Optimizer *optimizer;
-typedef torch::jit::script::Module *module;
+typedef torch::jit::script::Module *module_t;
 typedef torch::jit::IValue *ivalue;
-#define PROTECT(x) \
+// Variadic so that top-level commas in the body (e.g. multiple declarators,
+// std::map<K, V> template arguments) don't split the macro argument.
+#define PROTECT(...) \
   try { \
-    x \
+    __VA_ARGS__ \
   } catch (const exception& e) { \
       torch_last_err = strdup(e.what()); \
   }
@@ -24,9 +26,9 @@ typedef torch::jit::IValue *ivalue;
 // thread-local that the Rust side must poll with a second FFI call after
 // every op, the wrapper returns nullptr on success and the strdup'ed error
 // message on failure (ownership passes to the caller, freed with free()).
-#define PROTECT_ERR(x) \
+#define PROTECT_ERR(...) \
   try { \
-    x \
+    __VA_ARGS__ \
     return nullptr; \
   } catch (const exception& e) { \
       return strdup(e.what()); \
@@ -35,7 +37,7 @@ typedef torch::jit::IValue *ivalue;
 typedef void *tensor;
 typedef void *optimizer;
 typedef void *scalar;
-typedef void *module;
+typedef void *module_t;
 typedef void *ivalue;
 #endif
 
@@ -224,40 +226,40 @@ void atc_set_allow_tf32_cublas(int b);
 int atc_allow_tf32_cudnn();
 void atc_set_allow_tf32_cudnn(int b);
 
-module atm_load(char *);
-module atm_load_on_device(char *, int device);
-module atm_load_str(char *, size_t sz);
-module atm_load_str_on_device(char *, size_t sz, int device);
-tensor atm_forward(module, tensor *tensors, int ntensors);
-ivalue atm_forward_(module,
+module_t atm_load(char *);
+module_t atm_load_on_device(char *, int device);
+module_t atm_load_str(char *, size_t sz);
+module_t atm_load_str_on_device(char *, size_t sz, int device);
+tensor atm_forward(module_t, tensor *tensors, int ntensors);
+ivalue atm_forward_(module_t,
                     ivalue *ivalues,
                     int nivalues);
-tensor atm_method(module,
+tensor atm_method(module_t,
                   char *method_name,
                   tensor *tensors,
                   int ntensors);
-ivalue atm_method_(module,
+ivalue atm_method_(module_t,
                    char *method_name,
                    ivalue *ivalues,
                    int nivalues);
-ivalue atm_create_class_(module,
+ivalue atm_create_class_(module_t,
                    char *clz_name, 
                    ivalue *ivalues, 
                    int nivalues);
-void atm_eval(module);
-void atm_train(module);
-void atm_free(module);
-void atm_to(module m, int device, int dtype, bool non_blocking);
-void atm_save(module m, char*);
+void atm_eval(module_t);
+void atm_train(module_t);
+void atm_free(module_t);
+void atm_to(module_t m, int device, int dtype, bool non_blocking);
+void atm_save(module_t m, char*);
 int atm_get_profiling_mode();
 void atm_set_profiling_mode(int);
 void atm_fuser_cuda_set_enabled(bool);
 bool atm_fuser_cuda_is_enabled();
-void atm_named_parameters(module, void *data, void (*f)(void *, char *, tensor));
+void atm_named_parameters(module_t, void *data, void (*f)(void *, char *, tensor));
 
 // This function has to be followed by a call to atm_end_tracing.
-module atm_create_for_tracing(char *modl_name, tensor *inputs, int ninputs);
-void atm_end_tracing(module m, char *fn_name, tensor *outputs, int noutputs);
+module_t atm_create_for_tracing(char *modl_name, tensor *inputs, int ninputs);
+void atm_end_tracing(module_t m, char *fn_name, tensor *outputs, int noutputs);
 
 ivalue ati_none();
 ivalue ati_tensor(tensor);
