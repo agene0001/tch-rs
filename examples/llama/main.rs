@@ -285,7 +285,7 @@ fn precompute_freqs_cis(config: &Config) -> Tensor {
     Tensor::cat(&[&idx_theta_cos, &idx_theta_sin], -1)
 }
 
-fn llama(vs: nn::Path, args: Args) -> impl Module {
+fn llama(vs: nn::Path, args: Args) -> impl Module + use<> {
     let config = Config::config_7b();
     let freqs_cis = precompute_freqs_cis(&config).to_device(vs.device());
     let llama = Llama::new(vs, &config);
