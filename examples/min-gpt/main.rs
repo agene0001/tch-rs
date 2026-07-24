@@ -63,7 +63,7 @@ fn linear_no_bias(vs: nn::Path, in_dim: i64, out_dim: i64) -> Linear {
     }
 }
 
-fn causal_self_attention(p: &nn::Path, cfg: Config) -> impl ModuleT {
+fn causal_self_attention(p: &nn::Path, cfg: Config) -> impl ModuleT + use<> {
     let key = linear(p / "key", cfg.n_embd, cfg.n_embd);
     let query = linear(p / "query", cfg.n_embd, cfg.n_embd);
     let value = linear(p / "value", cfg.n_embd, cfg.n_embd);
@@ -87,7 +87,7 @@ fn causal_self_attention(p: &nn::Path, cfg: Config) -> impl ModuleT {
     })
 }
 
-fn block(p: &nn::Path, cfg: Config) -> impl ModuleT {
+fn block(p: &nn::Path, cfg: Config) -> impl ModuleT + use<> {
     let ln1 = nn::layer_norm(p / "ln1", vec![cfg.n_embd], Default::default());
     let ln2 = nn::layer_norm(p / "ln2", vec![cfg.n_embd], Default::default());
     let attn = causal_self_attention(p, cfg);
@@ -101,7 +101,7 @@ fn block(p: &nn::Path, cfg: Config) -> impl ModuleT {
     })
 }
 
-fn gpt(p: nn::Path, cfg: Config) -> impl ModuleT {
+fn gpt(p: nn::Path, cfg: Config) -> impl ModuleT + use<> {
     let p = &p.set_group(NO_WEIGHT_DECAY_GROUP);
     let tok_emb = nn::embedding(p / "tok_emb", cfg.vocab_size, cfg.n_embd, Default::default());
     let pos_emb = p.zeros("pos_emb", &[1, cfg.block_size, cfg.n_embd]);

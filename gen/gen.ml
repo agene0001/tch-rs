@@ -617,6 +617,11 @@ let write_cpp funcs filename =
       ph "extern \"C\" {";
       Map.iteri funcs ~f:(fun ~key:exported_name ~data:func ->
         let c_typed_args_list = Func.c_typed_args_list func in
+        (* For zero-argument ops the out-parameter must not be followed by a
+           trailing comma: `(int *out__, )` is ill-formed C/C++. *)
+        let out_sep_args =
+          if String.is_empty c_typed_args_list then "" else ", " ^ c_typed_args_list
+        in
         match func.returns with
         (* The `nothing`/`fixed` wrappers return nullptr on success and the
            strdup'ed error message on failure so the Rust side doesn't need a
@@ -630,7 +635,7 @@ let write_cpp funcs filename =
           pc "";
           ph "char *atg_%s(%s);" exported_name c_typed_args_list
         | `fixed ntensors ->
-          pc "char *atg_%s(tensor *out__, %s) {" exported_name c_typed_args_list;
+          pc "char *atg_%s(tensor *out__%s) {" exported_name out_sep_args;
           pc "  PROTECT_ERR(";
           pc "    auto outputs__ = %s;" (Func.c_call func);
           if ntensors = 1
@@ -642,12 +647,12 @@ let write_cpp funcs filename =
           pc "  )";
           pc "}";
           pc "";
-          ph "char *atg_%s(tensor *, %s);" exported_name c_typed_args_list
+          ph "char *atg_%s(tensor *%s);" exported_name out_sep_args
         | `dynamic ->
           (* Like the other return kinds, hand the (null-terminated) tensor
              array back through an out-parameter and return the error (or
              nullptr) directly, avoiding the extra error-poll FFI crossing. *)
-          pc "char *atg_%s(tensor **out__, %s) {" exported_name c_typed_args_list;
+          pc "char *atg_%s(tensor **out__%s) {" exported_name out_sep_args;
           pc "  PROTECT_ERR(";
           pc "    auto outputs__ = %s;" (Func.c_call func);
           (* the returned type is a C++ vector of tensors *)
@@ -662,7 +667,7 @@ let write_cpp funcs filename =
           pc "  )";
           pc "}";
           pc "";
-          ph "char *atg_%s(tensor **out__, %s);" exported_name c_typed_args_list
+          ph "char *atg_%s(tensor **out__%s);" exported_name out_sep_args
         | (`bool | `int64_t | `double) as returns ->
           (* Like the tensor-returning ops, write the result through an
              out-parameter and return the error (or nullptr) directly, so the
@@ -674,13 +679,13 @@ let write_cpp funcs filename =
             | `int64_t -> "int64_t"
             | `double -> "double"
           in
-          pc "char *atg_%s(%s *out__, %s) {" exported_name c_type c_typed_args_list;
+          pc "char *atg_%s(%s *out__%s) {" exported_name c_type out_sep_args;
           pc "  PROTECT_ERR(";
           pc "    out__[0] = %s;" (Func.c_call func);
           pc "  )";
           pc "}";
           pc "";
-          ph "char *atg_%s(%s *out__, %s);" exported_name c_type c_typed_args_list);
+          ph "char *atg_%s(%s *out__%s);" exported_name c_type out_sep_args);
       ph "}"))
 
 let write_fallible_wrapper funcs filename =

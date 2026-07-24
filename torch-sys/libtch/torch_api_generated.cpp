@@ -2121,7 +2121,7 @@ char *atg__new_zeros_with_same_feature_meta_out(tensor *out__, tensor out, tenso
   )
 }
 
-char *atg__nnpack_available(int *out__, ) {
+char *atg__nnpack_available(int *out__) {
   PROTECT_ERR(
     out__[0] = torch::_nnpack_available();
   )
@@ -3691,7 +3691,7 @@ char *atg__use_cudnn_ctc_loss_tensor(int *out__, tensor log_probs, tensor target
   )
 }
 
-char *atg__use_cudnn_rnn_flatten_weight(int *out__, ) {
+char *atg__use_cudnn_rnn_flatten_weight(int *out__) {
   PROTECT_ERR(
     out__[0] = torch::_use_cudnn_rnn_flatten_weight();
   )
@@ -9800,7 +9800,7 @@ char *atg_is_signed(int *out__, tensor self) {
   )
 }
 
-char *atg_is_vulkan_available(int *out__, ) {
+char *atg_is_vulkan_available(int *out__) {
   PROTECT_ERR(
     out__[0] = torch::is_vulkan_available();
   )
