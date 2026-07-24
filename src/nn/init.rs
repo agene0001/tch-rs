@@ -257,7 +257,7 @@ impl Init {
                 };
                 let q = f_init(Init::Orthogonal { gain }, &tensor.size(), tensor.device(), kind)
                     .unwrap();
-                let _ = tensor.view_as(&q).copy_(&q);
+                tensor.view_as(&q).copy_(&q);
             }
         })
     }

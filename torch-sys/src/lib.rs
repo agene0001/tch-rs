@@ -43,6 +43,22 @@ unsafe extern "C" {
     pub fn at_requires_grad(arg: *mut C_tensor) -> c_int;
     pub fn at_shape(arg: *mut C_tensor, sz: *mut i64);
     pub fn at_stride(arg: *mut C_tensor, sz: *mut i64);
+    pub fn at_dim_out(out: *mut i64, arg: *mut C_tensor) -> *mut c_char;
+    pub fn at_shape_out(
+        arg: *mut C_tensor,
+        sizes_out: *mut i64,
+        cap: i64,
+        ndim_out: *mut i64,
+    ) -> *mut c_char;
+    pub fn at_stride_out(
+        arg: *mut C_tensor,
+        strides_out: *mut i64,
+        cap: i64,
+        ndim_out: *mut i64,
+    ) -> *mut c_char;
+    pub fn at_scalar_type_out(out: *mut c_int, arg: *mut C_tensor) -> *mut c_char;
+    pub fn at_defined_out(out: *mut c_int, arg: *mut C_tensor) -> *mut c_char;
+    pub fn at_device_out(out: *mut c_int, arg: *mut C_tensor) -> *mut c_char;
     pub fn at_double_value_at_indexes(arg: *mut C_tensor, idx: *const i64, idx_len: c_int) -> f64;
     pub fn at_int64_value_at_indexes(arg: *mut C_tensor, idx: *const i64, idx_len: c_int) -> i64;
     pub fn at_get_num_interop_threads() -> c_int;
@@ -123,6 +139,16 @@ unsafe extern "C" {
         decoupled_wd: c_int,
     ) -> *mut c_char;
     pub fn at_foreach_zero(tensors: *const *mut C_tensor, ntensors: c_int) -> *mut c_char;
+    pub fn at_zero_grads(
+        params: *const *mut C_tensor,
+        ntensors: c_int,
+        set_to_none: c_int,
+    ) -> *mut c_char;
+    pub fn at_collect_grads(
+        params: *const *mut C_tensor,
+        ntensors: c_int,
+        grads_out: *mut *mut C_tensor,
+    ) -> *mut c_char;
     pub fn at_save(arg: *mut C_tensor, filename: *const c_char);
     pub fn at_save_to_stream(arg: *mut C_tensor, stream_ptr: *mut c_void);
     pub fn at_load(filename: *const c_char) -> *mut C_tensor;
@@ -269,7 +295,7 @@ unsafe extern "C" {
     pub fn ati_double(v: f64) -> *mut CIValue;
     pub fn ati_tensor(v: *mut C_tensor) -> *mut CIValue;
     pub fn ati_string(s: *const c_char) -> *mut CIValue;
-    pub fn ati_string_len(s: *const c_char, len: c_int) -> *mut CIValue;
+    pub fn ati_string_len(s: *const c_char, len: usize) -> *mut CIValue;
     pub fn ati_tuple(v: *const *mut CIValue, n: c_int) -> *mut CIValue;
     pub fn ati_generic_list(v: *const *mut CIValue, n: c_int) -> *mut CIValue;
     pub fn ati_generic_dict(v: *const *mut CIValue, n: c_int) -> *mut CIValue;
@@ -299,7 +325,7 @@ unsafe extern "C" {
     pub fn ati_to_bool_list(arg: *mut CIValue, outputs: *mut c_char, n: c_int);
     pub fn ati_to_tensor_list(arg: *mut CIValue, outputs: *mut *mut C_tensor, n: c_int);
     pub fn ati_to_string(arg: *mut CIValue) -> *mut c_char;
-    pub fn ati_to_string_len(arg: *mut CIValue, len_out: *mut c_int) -> *mut c_char;
+    pub fn ati_to_string_len(arg: *mut CIValue, len_out: *mut usize) -> *mut c_char;
 
     pub fn ati_clone(arg: *mut CIValue) -> *mut CIValue;
     pub fn ati_free(arg: *mut CIValue);

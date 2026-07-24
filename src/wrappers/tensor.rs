@@ -77,15 +77,28 @@ impl Tensor {
 
     /// Returns the number of dimension of the tensor.
     pub fn dim(&self) -> usize {
-        unsafe_torch!(at_dim(self.c_tensor))
+        let mut out = 0i64;
+        let err__ = unsafe { at_dim_out(&mut out, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
+        out as usize
     }
 
     /// Returns the shape of the input tensor.
     pub fn size(&self) -> Vec<i64> {
-        let dim = unsafe_torch!(at_dim(self.c_tensor));
-        let mut sz = vec![0i64; dim];
-        unsafe_torch!(at_shape(self.c_tensor, sz.as_mut_ptr()));
-        sz
+        // Rank and shape in a single crossing for the (near-universal) case
+        // of at most 8 dims; higher ranks pay one retry with an exact buffer.
+        let mut sz = [0i64; 8];
+        let mut ndim = 0i64;
+        let err__ = unsafe { at_shape_out(self.c_tensor, sz.as_mut_ptr(), 8, &mut ndim) };
+        crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
+        if ndim <= 8 {
+            sz[..ndim as usize].to_vec()
+        } else {
+            let mut sz = vec![0i64; ndim as usize];
+            let err__ = unsafe { at_shape_out(self.c_tensor, sz.as_mut_ptr(), ndim, &mut ndim) };
+            crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
+            sz
+        }
     }
 
     /// Reads the tensor shape into a stack-allocated array, erroring out on
@@ -94,16 +107,17 @@ impl Tensor {
         const DIM_NAMES: [&str; 7] = [
             "zero dims", "one dim", "two dims", "three dims", "four dims", "five dims", "six dims",
         ];
-        let dim = unsafe_torch!(at_dim(self.c_tensor));
-        if dim != N {
+        let mut sz = [0i64; N];
+        let mut ndim = 0i64;
+        let err__ = unsafe { at_shape_out(self.c_tensor, sz.as_mut_ptr(), N as i64, &mut ndim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
+        if ndim as usize != N {
             return Err(TchError::Shape(format!(
                 "expected {}, got {:?}",
                 DIM_NAMES.get(N).copied().unwrap_or("N dims"),
                 self.size()
             )));
         }
-        let mut sz = [0i64; N];
-        unsafe_torch!(at_shape(self.c_tensor, sz.as_mut_ptr()));
         Ok(sz)
     }
 
@@ -113,31 +127,30 @@ impl Tensor {
         const DIM_NAMES: [&str; 7] = [
             "zero dims", "one dim", "two dims", "three dims", "four dims", "five dims", "six dims",
         ];
-        let dim = unsafe_torch!(at_dim(self.c_tensor));
-        if dim != N {
+        let mut sz = [0i64; N];
+        let mut ndim = 0i64;
+        let err__ = unsafe { at_stride_out(self.c_tensor, sz.as_mut_ptr(), N as i64, &mut ndim) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
+        if ndim as usize != N {
             return Err(TchError::Shape(format!(
                 "expected {}, got {:?}",
                 DIM_NAMES.get(N).copied().unwrap_or("N dims"),
                 self.size()
             )));
         }
-        let mut sz = [0i64; N];
-        unsafe_torch!(at_stride(self.c_tensor, sz.as_mut_ptr()));
         Ok(sz)
     }
 
     /// Returns the size of the tensor along a single dimension, avoiding the
     /// heap allocation that `size()` performs.
     pub(crate) fn size_at(&self, dim: usize) -> i64 {
-        let ndim = unsafe_torch!(at_dim(self.c_tensor));
+        let mut sz = [0i64; 8];
+        let mut ndim = 0i64;
+        let err__ = unsafe { at_shape_out(self.c_tensor, sz.as_mut_ptr(), 8, &mut ndim) };
+        crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
+        let ndim = ndim as usize;
         assert!(dim < ndim, "size_at: dim {dim} out of range for a {ndim}-d tensor");
-        if ndim <= 8 {
-            let mut sz = [0i64; 8];
-            unsafe_torch!(at_shape(self.c_tensor, sz.as_mut_ptr()));
-            sz[dim]
-        } else {
-            self.size()[dim]
-        }
+        if dim < 8 { sz[dim] } else { self.size()[dim] }
     }
 
     /// Returns the tensor size for single dimension tensors.
@@ -178,10 +191,18 @@ impl Tensor {
 
     /// Returns the stride of the input tensor.
     pub fn stride(&self) -> Vec<i64> {
-        let dim = unsafe_torch!(at_dim(self.c_tensor));
-        let mut sz = vec![0i64; dim];
-        unsafe_torch!(at_stride(self.c_tensor, sz.as_mut_ptr()));
-        sz
+        let mut sz = [0i64; 8];
+        let mut ndim = 0i64;
+        let err__ = unsafe { at_stride_out(self.c_tensor, sz.as_mut_ptr(), 8, &mut ndim) };
+        crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
+        if ndim <= 8 {
+            sz[..ndim as usize].to_vec()
+        } else {
+            let mut sz = vec![0i64; ndim as usize];
+            let err__ = unsafe { at_stride_out(self.c_tensor, sz.as_mut_ptr(), ndim, &mut ndim) };
+            crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
+            sz
+        }
     }
 
     /// Returns the tensor strides for single dimension tensors.
@@ -223,7 +244,9 @@ impl Tensor {
     /// Returns the kind of elements stored in the input tensor. Returns
     /// an error on undefined tensors and unsupported data types.
     pub fn f_kind(&self) -> Result<Kind, TchError> {
-        let kind = unsafe_torch!(at_scalar_type(self.c_tensor));
+        let mut kind = 0 as c_int;
+        let err__ = unsafe { at_scalar_type_out(&mut kind, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
         Kind::from_c_int(kind)
     }
 
@@ -235,7 +258,9 @@ impl Tensor {
 
     /// Returns the device on which the input tensor is located.
     pub fn device(&self) -> Device {
-        let device = unsafe_torch!(at_device(self.c_tensor));
+        let mut device = 0 as c_int;
+        let err__ = unsafe { at_device_out(&mut device, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
         Device::from_c_int(device)
     }
 
@@ -285,7 +310,10 @@ impl Tensor {
 
     /// Returns true if the tensor is defined.
     pub fn defined(&self) -> bool {
-        unsafe_torch!(at_defined(self.c_tensor) != 0)
+        let mut defined = 0 as c_int;
+        let err__ = unsafe { at_defined_out(&mut defined, self.c_tensor) };
+        crate::wrappers::utils::ptr_err_to_result(err__).unwrap();
+        defined != 0
     }
 
     /// Returns true if the tensor is compatible with MKL-DNN (oneDNN).
@@ -400,11 +428,29 @@ impl Tensor {
 
     /// Zeroes the given tensors (typically gradients) with a single batched
     /// `_foreach_zero_` call.
-    pub(crate) fn f_foreach_zero(tensors: &[Tensor]) -> Result<(), TchError> {
-        let ptrs: Vec<_> = tensors.iter().map(|t| t.c_tensor).collect();
-        let err__ =
-            unsafe { torch_sys::at_foreach_zero(ptrs.as_ptr(), ptrs.len() as c_int) };
+    /// Resets (`set_to_none`, the PyTorch default) or zeroes the gradients of
+    /// `params` in a single FFI crossing.
+    pub(crate) fn f_zero_grads(params: &[&Tensor], set_to_none: bool) -> Result<(), TchError> {
+        let ptrs: Vec<_> = params.iter().map(|t| t.c_tensor).collect();
+        let err__ = unsafe {
+            torch_sys::at_zero_grads(ptrs.as_ptr(), ptrs.len() as c_int, c_int::from(set_to_none))
+        };
         crate::wrappers::utils::ptr_err_to_result(err__)
+    }
+
+    /// Fetches the gradient of every param in a single FFI crossing; `None`
+    /// for params whose gradient is undefined.
+    pub(crate) fn f_collect_grads(params: &[&Tensor]) -> Result<Vec<Option<Tensor>>, TchError> {
+        let ptrs: Vec<_> = params.iter().map(|t| t.c_tensor).collect();
+        let mut out: Vec<*mut torch_sys::C_tensor> = vec![std::ptr::null_mut(); ptrs.len()];
+        let err__ = unsafe {
+            torch_sys::at_collect_grads(ptrs.as_ptr(), ptrs.len() as c_int, out.as_mut_ptr())
+        };
+        crate::wrappers::utils::ptr_err_to_result(err__)?;
+        Ok(out
+            .into_iter()
+            .map(|c_tensor| if c_tensor.is_null() { None } else { Some(Tensor { c_tensor }) })
+            .collect())
     }
 
     pub fn f_run_backward<T1, T2>(

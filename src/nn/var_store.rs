@@ -394,24 +394,32 @@ impl VarStore {
         self.kind = kind;
     }
 
-    /// Casts all float-like variable of a var store to half-precision (Half kind).
+    /// Casts all float-like variable of a var store to half-precision (Half kind)
+    /// and sets the default kind for new variables.
     pub fn half(&mut self) {
         self.root().half();
+        self.kind = Kind::Half;
     }
 
-    /// Casts all float-like variable of a var store to bfloat16-precision (BFloat16 kind).
+    /// Casts all float-like variable of a var store to bfloat16-precision (BFloat16 kind)
+    /// and sets the default kind for new variables.
     pub fn bfloat16(&mut self) {
         self.root().bfloat16();
+        self.kind = Kind::BFloat16;
     }
 
-    /// Casts all float-like variable of a var store to single-precision (Float kind).
+    /// Casts all float-like variable of a var store to single-precision (Float kind)
+    /// and sets the default kind for new variables.
     pub fn float(&mut self) {
         self.root().float();
+        self.kind = Kind::Float;
     }
 
-    /// Casts all float-like variable of a var store to single-precision (Double kind).
+    /// Casts all float-like variable of a var store to double-precision (Double kind)
+    /// and sets the default kind for new variables.
     pub fn double(&mut self) {
         self.root().double();
+        self.kind = Kind::Double;
     }
 
     /// Migrates a var store and all its tensor to a target device.

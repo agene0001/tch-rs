@@ -136,17 +136,22 @@ impl Device {
         }
     }
 
-    pub(super) fn from_c_int(v: libc::c_int) -> Self {
+    pub(super) fn f_from_c_int(v: libc::c_int) -> Result<Self, crate::TchError> {
         match v {
-            -1 => Device::Cpu,
-            -2 => Device::Mps,
-            -3 => Device::Vulkan,
-            index if index >= 0 => Device::Cuda(index as usize),
-            -4 => panic!(
+            -1 => Ok(Device::Cpu),
+            -2 => Ok(Device::Mps),
+            -3 => Ok(Device::Vulkan),
+            index if index >= 0 => Ok(Device::Cuda(index as usize)),
+            -4 => Err(crate::TchError::Convert(
                 "libtorch reported a device type not supported by tch (not cpu/cuda/mps/vulkan)"
-            ),
-            _ => panic!("unexpected device {v}"),
+                    .to_string(),
+            )),
+            _ => Err(crate::TchError::Convert(format!("unexpected device {v}"))),
         }
+    }
+
+    pub(super) fn from_c_int(v: libc::c_int) -> Self {
+        Self::f_from_c_int(v).unwrap()
     }
 
     /// Returns a GPU device if available, else default to CPU.

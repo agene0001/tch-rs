@@ -7,29 +7,47 @@ use std::path::Path;
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-// Builds the broadcastable mean/std constants on the same device as the
-// input. Creating them per call replaces the previous global Mutex-guarded
-// CPU tensors, which serialized concurrent callers and could not be used
-// with inputs on other devices.
-fn mean_and_std(tensor: &Tensor) -> Result<(Tensor, Tensor), TchError> {
+// Runs `f` with the broadcastable mean/std constants on the same device as
+// the input, cached per (thread, device): building them per call cost six
+// extra op crossings and two host-to-device copies per normalized image,
+// while a process-global Mutex (the pre-fork design) would serialize
+// concurrent callers. The closure style hands out borrows so cache hits
+// don't even pay a shallow_clone.
+fn with_mean_and_std<R>(
+    tensor: &Tensor,
+    f: impl FnOnce(&Tensor, &Tensor) -> Result<R, TchError>,
+) -> Result<R, TchError> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<Vec<(Device, Tensor, Tensor)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
     let device = tensor.device();
-    let mean = Tensor::f_from_slice(&IMAGENET_MEAN)?.f_view([3, 1, 1])?.f_to_device(device)?;
-    let std = Tensor::f_from_slice(&IMAGENET_STD)?.f_view([3, 1, 1])?.f_to_device(device)?;
-    Ok((mean, std))
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.iter().any(|(d, _, _)| *d == device) {
+            let mean =
+                Tensor::f_from_slice(&IMAGENET_MEAN)?.f_view([3, 1, 1])?.f_to_device(device)?;
+            let std =
+                Tensor::f_from_slice(&IMAGENET_STD)?.f_view([3, 1, 1])?.f_to_device(device)?;
+            cache.push((device, mean, std));
+        }
+        let (_, mean, std) = cache.iter().find(|(d, _, _)| *d == device).unwrap();
+        f(mean, std)
+    })
 }
 
 pub fn normalize(tensor: &Tensor) -> Result<Tensor, TchError> {
-    let (mean, std) = mean_and_std(tensor)?;
-    (tensor.to_kind(Kind::Float) / 255.0).f_sub(&mean)?.f_div(&std)
+    with_mean_and_std(tensor, |mean, std| {
+        (tensor.to_kind(Kind::Float) / 255.0).f_sub(mean)?.f_div(std)
+    })
 }
 
 pub fn unnormalize(tensor: &Tensor) -> Result<Tensor, TchError> {
-    let (mean, std) = mean_and_std(tensor)?;
-    // Round to the nearest integer like torchvision's save_image
-    // (mul(255).add_(0.5).clamp_(0, 255)) instead of truncating.
-    let tensor =
-        ((tensor.f_mul(&std)?.f_add(&mean)? * 255.0) + 0.5).clamp(0., 255.0).to_kind(Kind::Uint8);
-    Ok(tensor)
+    with_mean_and_std(tensor, |mean, std| {
+        // Round to the nearest integer like torchvision's save_image
+        // (mul(255).add_(0.5).clamp_(0, 255)) instead of truncating.
+        Ok(((tensor.f_mul(std)?.f_add(mean)? * 255.0) + 0.5).clamp(0., 255.0).to_kind(Kind::Uint8))
+    })
 }
 
 /// Saves an image to a path.

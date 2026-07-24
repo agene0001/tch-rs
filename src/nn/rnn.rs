@@ -254,6 +254,8 @@ impl RNN for LSTM {
 
     fn seq_init_t(&self, input: &Tensor, in_state: &LSTMState, train: bool) -> (Tensor, LSTMState) {
         let LSTMState((h, c)) = in_state;
+        // `lstm` unifies the state slice and params under one `T: Borrow<Tensor>`,
+        // so passing `&[h, c]` (T = &Tensor) forces collecting weight refs here.
         let flat_weights = self.flat_weights.iter().collect::<Vec<_>>();
         let (output, h, c) = input.lstm(
             &[h, c],

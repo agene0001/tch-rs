@@ -205,51 +205,62 @@ pub fn conv3d<'a, T: Borrow<Path<'a>>>(vs: T, i: i64, o: i64, k: i64, c: ConvCon
 
 impl super::module::Module for Conv1D {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let (xs, padding) = match self.config.padding_mode {
-            PaddingMode::Zeros => (xs.shallow_clone(), self.config.padding),
-            p => (p.pad(xs, &self.reversed_padding_repeated_twice), [0]),
+        // The default Zeros arm convolves the input directly: unifying the
+        // match arms through a shallow_clone would cost three extra FFI
+        // crossings and a C++ wrapper alloc/free per forward.
+        let conv = |xs: &Tensor, padding: [i64; 1]| {
+            xs.conv1d(
+                &self.ws,
+                self.bs.as_ref(),
+                self.config.stride,
+                padding,
+                self.config.dilation,
+                self.config.groups,
+            )
         };
-        xs.conv1d(
-            &self.ws,
-            self.bs.as_ref(),
-            self.config.stride,
-            padding,
-            self.config.dilation,
-            self.config.groups,
-        )
+        match self.config.padding_mode {
+            PaddingMode::Zeros => conv(xs, self.config.padding),
+            p => conv(&p.pad(xs, &self.reversed_padding_repeated_twice), [0]),
+        }
     }
 }
 
 impl super::module::Module for Conv2D {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let (xs, padding) = match self.config.padding_mode {
-            PaddingMode::Zeros => (xs.shallow_clone(), self.config.padding),
-            p => (p.pad(xs, &self.reversed_padding_repeated_twice), [0, 0]),
+        // See Conv1D::forward on why the Zeros arm avoids shallow_clone.
+        let conv = |xs: &Tensor, padding: [i64; 2]| {
+            xs.conv2d(
+                &self.ws,
+                self.bs.as_ref(),
+                self.config.stride,
+                padding,
+                self.config.dilation,
+                self.config.groups,
+            )
         };
-        xs.conv2d(
-            &self.ws,
-            self.bs.as_ref(),
-            self.config.stride,
-            padding,
-            self.config.dilation,
-            self.config.groups,
-        )
+        match self.config.padding_mode {
+            PaddingMode::Zeros => conv(xs, self.config.padding),
+            p => conv(&p.pad(xs, &self.reversed_padding_repeated_twice), [0, 0]),
+        }
     }
 }
 
 impl super::module::Module for Conv3D {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let (xs, padding) = match self.config.padding_mode {
-            PaddingMode::Zeros => (xs.shallow_clone(), self.config.padding),
-            p => (p.pad(xs, &self.reversed_padding_repeated_twice), [0, 0, 0]),
+        // See Conv1D::forward on why the Zeros arm avoids shallow_clone.
+        let conv = |xs: &Tensor, padding: [i64; 3]| {
+            xs.conv3d(
+                &self.ws,
+                self.bs.as_ref(),
+                self.config.stride,
+                padding,
+                self.config.dilation,
+                self.config.groups,
+            )
         };
-        xs.conv3d(
-            &self.ws,
-            self.bs.as_ref(),
-            self.config.stride,
-            padding,
-            self.config.dilation,
-            self.config.groups,
-        )
+        match self.config.padding_mode {
+            PaddingMode::Zeros => conv(xs, self.config.padding),
+            p => conv(&p.pad(xs, &self.reversed_padding_repeated_twice), [0, 0, 0]),
+        }
     }
 }

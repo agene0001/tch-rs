@@ -56,6 +56,12 @@ int at_device(tensor);
 size_t at_dim(tensor);
 void at_shape(tensor, int64_t *);
 void at_stride(tensor, int64_t *);
+char *at_dim_out(int64_t *out, tensor t);
+char *at_shape_out(tensor t, int64_t *sizes_out, int64_t cap, int64_t *ndim_out);
+char *at_stride_out(tensor t, int64_t *strides_out, int64_t cap, int64_t *ndim_out);
+char *at_scalar_type_out(int *out, tensor t);
+char *at_defined_out(int *out, tensor t);
+char *at_device_out(int *out, tensor t);
 int at_scalar_type(tensor);
 
 void at__amp_non_finite_check_and_unscale(tensor, tensor, tensor);
@@ -82,6 +88,8 @@ char *at_foreach_adam_step(tensor *params, tensor *grads, tensor *exp_avgs,
                            double beta2, double weight_decay, double eps,
                            int decoupled_wd);
 char *at_foreach_zero(tensor *tensors, int ntensors);
+char *at_zero_grads(tensor *params, int ntensors, int set_to_none);
+char *at_collect_grads(tensor *params, int ntensors, tensor *grads_out);
 
 tensor at_get(tensor, int64_t index);
 void at_fill_double(tensor, double);
@@ -265,7 +273,7 @@ ivalue ati_int(int64_t);
 ivalue ati_double(double);
 ivalue ati_bool(int);
 ivalue ati_string(char *);
-ivalue ati_string_len(char *, int);
+ivalue ati_string_len(char *, size_t);
 ivalue ati_tuple(ivalue *, int);
 ivalue ati_generic_list(ivalue *, int);
 ivalue ati_generic_dict(ivalue *, int);
@@ -280,7 +288,7 @@ tensor ati_to_tensor(ivalue);
 int64_t ati_to_int(ivalue);
 double ati_to_double(ivalue);
 char *ati_to_string(ivalue);
-char *ati_to_string_len(ivalue, int *);
+char *ati_to_string_len(ivalue, size_t *);
 int ati_to_bool(ivalue);
 int ati_to_device(ivalue);
 int ati_length(ivalue);

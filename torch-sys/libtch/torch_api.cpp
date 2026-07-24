@@ -164,6 +164,57 @@ void at_stride(tensor t, int64_t *dims) {
   PROTECT(int i = 0; for (int64_t dim : t->strides()) dims[i++] = dim;)
 }
 
+// Single-crossing metadata getters: the value comes back through an
+// out-parameter and the return is nullptr or the error message, saving the
+// poll-the-TLS-error second FFI crossing the getters above require.
+char *at_dim_out(int64_t *out, tensor t) {
+  PROTECT_ERR(*out = t->dim();)
+}
+
+// Writes min(ndim, cap) entries and always stores the true ndim: one
+// crossing answers both the rank and the shape for stack-sized ranks, and
+// tells the caller what buffer to retry with otherwise.
+char *at_shape_out(tensor t, int64_t *sizes_out, int64_t cap, int64_t *ndim_out) {
+  PROTECT_ERR(
+      auto sizes = t->sizes();
+      int64_t ndim = (int64_t)sizes.size();
+      *ndim_out = ndim;
+      int64_t n = ndim < cap ? ndim : cap;
+      for (int64_t i = 0; i < n; ++i) sizes_out[i] = sizes[i];
+  )
+}
+
+char *at_stride_out(tensor t, int64_t *strides_out, int64_t cap, int64_t *ndim_out) {
+  PROTECT_ERR(
+      auto strides = t->strides();
+      int64_t ndim = (int64_t)strides.size();
+      *ndim_out = ndim;
+      int64_t n = ndim < cap ? ndim : cap;
+      for (int64_t i = 0; i < n; ++i) strides_out[i] = strides[i];
+  )
+}
+
+char *at_scalar_type_out(int *out, tensor t) {
+  PROTECT_ERR(*out = static_cast<int>(t->scalar_type());)
+}
+
+char *at_defined_out(int *out, tensor t) {
+  PROTECT_ERR(*out = t->defined();)
+}
+
+// Same device encoding as at_device (cpu -1, mps -2, vulkan -3, cuda index,
+// unknown -4).
+char *at_device_out(int *out, tensor t) {
+  PROTECT_ERR(
+      auto device = t->device();
+      if (device.type() == at::kCPU) *out = -1;
+      else if (device.type() == at::kMPS) *out = -2;
+      else if (device.type() == at::kVulkan) *out = -3;
+      else if (device.type() == at::kCUDA) *out = device.index();
+      else *out = -4;
+  )
+}
+
 int at_scalar_type(tensor t) {
   PROTECT(return static_cast<int>(t->scalar_type());)
   return -1;
@@ -330,6 +381,35 @@ char *at_foreach_zero(tensor *tensors, int ntensors) {
   )
 }
 
+// Resets (set_to_none != 0, the torch.optim default) or zeroes the gradients
+// of a parameter list in a single FFI crossing. Resetting leaves the grads
+// undefined so parameters that receive no gradient in a later backward are
+// skipped by the optimizer instead of being stepped with a zero gradient.
+char *at_zero_grads(tensor *params, int ntensors, int set_to_none) {
+  PROTECT_ERR(
+      for (int i = 0; i < ntensors; ++i) {
+        torch::Tensor &t = *(params[i]);
+        if (set_to_none) {
+          t.mutable_grad().reset();
+        } else if (t.grad().defined()) {
+          t.mutable_grad().zero_();
+        }
+      }
+  )
+}
+
+// Fetches the gradient of every parameter in a single FFI crossing; writes
+// nullptr for undefined gradients. Ownership of the non-null tensors passes
+// to the caller.
+char *at_collect_grads(tensor *params, int ntensors, tensor *grads_out) {
+  PROTECT_ERR(
+      for (int i = 0; i < ntensors; ++i) {
+        torch::Tensor g = params[i]->grad();
+        grads_out[i] = g.defined() ? new torch::Tensor(g) : nullptr;
+      }
+  )
+}
+
 // Clips the given gradients' total norm in-place and returns the total norm,
 // following torch.nn.utils.clip_grad_norm_: per-tensor norms are batched with
 // the _foreach kernels (grouped by device/dtype, like PyTorch's grouping),
@@ -354,7 +434,11 @@ tensor at_clip_grad_norm(tensor *grads, int ngrads, double max_norm,
                        (g.device().has_index() ? g.device().index() : -1);
         groups[{dkey, (int)g.scalar_type()}].push_back(g);
       }
-      bool inf_norm = std::isinf(norm_type);
+      // Only +inf is the max-norm special case; -inf is the min of |g|
+      // (torch.linalg.vector_norm semantics) and must not fall into the
+      // max-based branches.
+      bool inf_norm = norm_type == INFINITY;
+      bool neg_inf_norm = norm_type == -INFINITY;
       std::vector<torch::Tensor> norms;
       norms.reserve(gs.size());
       for (auto &kv : groups) {
@@ -362,19 +446,23 @@ tensor at_clip_grad_norm(tensor *grads, int ngrads, double max_norm,
         bool foreach_ok = true;
         for (auto &g : group)
           if (g.layout() != at::kStrided) foreach_ok = false;
-        if (foreach_ok && !inf_norm) {
+        if (foreach_ok && !inf_norm && !neg_inf_norm) {
           auto group_norms = at::_foreach_norm(group, norm_type);
           norms.insert(norms.end(), group_norms.begin(), group_norms.end());
         } else {
           for (auto &g : group)
-            norms.push_back(inf_norm ? g.abs().max() : g.norm(norm_type));
+            norms.push_back(inf_norm ? g.abs().max()
+                                     : neg_inf_norm ? g.abs().min()
+                                                    : g.norm(norm_type));
         }
       }
       auto device = gs[0].device();
       for (auto &n : norms)
         if (n.device() != device) n = n.to(device);
       auto stacked = torch::stack(norms);
-      auto total_norm = inf_norm ? stacked.max() : stacked.norm(norm_type);
+      auto total_norm = inf_norm       ? stacked.max()
+                        : neg_inf_norm ? stacked.min()
+                                       : stacked.norm(norm_type);
       if (error_if_nonfinite && !torch::isfinite(total_norm).item<bool>())
         throw std::runtime_error(
             "the total norm for gradients from parameters is non-finite, so "
@@ -656,11 +744,13 @@ tensor at_load_image(char *filename) {
       int w = -1; int h = -1; int c = -1;
       void *data = stbi_load(filename, &w, &h, &c, 3);
       if (data == nullptr) throw std::invalid_argument(stbi_failure_reason());
-      // empty: the memcpy below overwrites every byte, so zero-filling first
-      // would be redundant work.
-      torch::Tensor tensor = torch::empty({h, w, 3}, at::ScalarType::Byte);
-      memcpy(tensor.data_ptr(), data, h * w * 3); free(data);
-      return new torch::Tensor(tensor);)
+      // Zero-copy: hand the stb buffer straight to the tensor instead of a
+      // full-image memcpy; the deleter releases it when the tensor is freed
+      // (stbi_image_free is free()).
+      return new torch::Tensor(torch::from_blob(
+          data, {(int64_t)h, (int64_t)w, 3},
+          [](void *p) { stbi_image_free(p); },
+          at::TensorOptions().dtype(at::ScalarType::Byte)));)
   return nullptr;
 }
 
@@ -669,11 +759,11 @@ tensor at_load_image_from_memory(unsigned char *img_data, size_t img_size) {
       int w = -1; int h = -1; int c = -1;
       void *data = stbi_load_from_memory(img_data, img_size, &w, &h, &c, 3);
       if (data == nullptr) throw std::invalid_argument(stbi_failure_reason());
-      // empty: the memcpy below overwrites every byte, so zero-filling first
-      // would be redundant work.
-      torch::Tensor tensor = torch::empty({h, w, 3}, at::ScalarType::Byte);
-      memcpy(tensor.data_ptr(), data, h * w * 3); free(data);
-      return new torch::Tensor(tensor);)
+      // Zero-copy: see at_load_image.
+      return new torch::Tensor(torch::from_blob(
+          data, {(int64_t)h, (int64_t)w, 3},
+          [](void *p) { stbi_image_free(p); },
+          at::TensorOptions().dtype(at::ScalarType::Byte)));)
   return nullptr;
 }
 
@@ -694,6 +784,8 @@ int at_save_image(tensor tensor, char *filename) {
               "the input tensor has to be on cpu");
           if (sizes.size() != 3) throw std::invalid_argument(
               "invalid number of dimensions, should be 3");
+          if (tensor->scalar_type() != at::ScalarType::Byte) throw std::invalid_argument(
+              "the input tensor should have u8 elements (Kind::Uint8)");
           int h = sizes[0]; int w = sizes[1]; int c = sizes[2];
           auto tmp_tensor = tensor->contiguous();
           void *tensor_data = tmp_tensor.data_ptr();
@@ -750,6 +842,8 @@ tensor at_resize_image(tensor tensor, int out_w, int out_h) {
           "the input tensor has to be on cpu");
       if (sizes.size() != 3) throw std::invalid_argument(
           "invalid number of dimensions, should be 3");
+      if (tensor->scalar_type() != at::ScalarType::Byte) throw std::invalid_argument(
+          "the input tensor should have u8 elements (Kind::Uint8)");
       int h = sizes[0]; int w = sizes[1]; int c = sizes[2];
       auto tmp_tensor = tensor->contiguous();
       const unsigned char *tensor_data = (unsigned char *)tmp_tensor.data_ptr();
@@ -1351,7 +1445,7 @@ ivalue ati_string(char *s) {
 // Takes an explicit length so Rust &str data can be passed without a
 // CString copy, and so strings containing NUL bytes round-trip like
 // TorchScript allows.
-ivalue ati_string_len(char *s, int len) {
+ivalue ati_string_len(char *s, size_t len) {
   PROTECT(string str(s, len); return new torch::jit::IValue(str);)
   return nullptr;
 }
@@ -1498,10 +1592,11 @@ char *ati_to_string(ivalue i) {
 
 // Length-returning variant so strings with embedded NUL bytes survive the
 // round trip (strdup in ati_to_string truncates at the first NUL).
-char *ati_to_string_len(ivalue i, int *len_out) {
+char *ati_to_string_len(ivalue i, size_t *len_out) {
   PROTECT(auto str = i->toStringRef();
           *len_out = str.size();
           char *buf = (char*)malloc(str.size() + 1);
+          if (!buf) throw std::runtime_error("ati_to_string_len: malloc failed");
           memcpy(buf, str.data(), str.size());
           buf[str.size()] = 0;
           return buf;)

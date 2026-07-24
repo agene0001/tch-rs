@@ -52,10 +52,11 @@ export("densenet121", m.densenet121(), 224)
 export("mobilenet_v2", m.mobilenet_v2(), 224)
 export("squeezenet1_0", m.squeezenet1_0(), 224)
 export("squeezenet1_1", m.squeezenet1_1(), 224)
-# tch's inception does not implement the aux classifier (eval-mode identical)
-# nor transform_input (pretrained torchvision weights expect that input
-# renormalization; disable it for the architecture comparison).
-export("inception_v3", m.inception_v3(aux_logits=False, transform_input=False, init_weights=True), 299)
+# Match tch's inception::v3 defaults (aux_logits=True, transform_input=True):
+# the aux classifier weights must be present for VarStore::load, and both
+# sides apply the same input renormalization. Eval-mode outputs are the main
+# tower only on both sides.
+export("inception_v3", m.inception_v3(aux_logits=True, transform_input=True, init_weights=True), 299)
 export("efficientnet_b0", m.efficientnet_b0(), 224)
 export("efficientnet_b4", m.efficientnet_b4(), 224)
 export("efficientnet_b5", m.efficientnet_b5(), 224)

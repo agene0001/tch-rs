@@ -1171,9 +1171,93 @@ fn foreach_adamw_respects_group_lr_and_zero_grad() {
     // bit-identical.
     assert_eq!(frozen_v, vec![1.0, 1.0, 1.0]);
     assert!(live_v.iter().all(|&v| v < 1.0), "live weights should have moved: {live_v:?}");
-    // zero_grad through the foreach path actually zeroes the grads.
+    // zero_grad through the foreach path resets grads to undefined, matching
+    // PyTorch's `set_to_none=True` default and the C++ backend: a param with
+    // no fresh gradient must then be skipped by the next step (no weight
+    // decay / momentum drift), which the bit-identity check below relies on.
     opt.zero_grad();
-    let g = frozen.grad();
-    assert!(g.defined());
-    assert_eq!(f64::try_from(g.abs().sum(Kind::Double)).unwrap(), 0.0);
+    assert!(!frozen.grad().defined());
+    assert!(!live.grad().defined());
+    let live_before = Vec::<f64>::try_from(live.to_kind(Kind::Double)).unwrap();
+    opt.step();
+    let live_after = Vec::<f64>::try_from(live.to_kind(Kind::Double)).unwrap();
+    assert_eq!(live_before, live_after, "step after zero_grad must be a no-op");
+}
+
+/// Round-3 measurements for the fixes from the 2026-07 audit: conv forward
+/// without the shallow_clone round-trip, single-crossing metadata getters,
+/// batched grad collection/reset in the foreach optimizer, cached imagenet
+/// normalization constants, and the LSTM step path. Run with
+/// `cargo test --release --test fork_parity_tests -- --ignored bench_round3 --nocapture`.
+#[test]
+#[ignore]
+fn bench_round3_optimizations() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    // Conv2D forward, default Zeros padding: 1 FFI crossing instead of 4.
+    let vs = nn::VarStore::new(Device::Cpu);
+    let conv = nn::conv2d(vs.root() / "conv", 16, 16, 3, Default::default());
+    let xs = Tensor::randn([1, 16, 8, 8], (Kind::Float, Device::Cpu));
+    let start = Instant::now();
+    for _ in 0..100_000 {
+        let _ = black_box(conv.forward(&xs));
+    }
+    println!("conv2d 16x8x8 fwd x100k:       {:?}", start.elapsed());
+
+    // Metadata getters: one crossing each instead of two (four for sizes).
+    let t = Tensor::randn([64, 64], (Kind::Float, Device::Cpu));
+    let start = Instant::now();
+    for _ in 0..1_000_000 {
+        let _ = black_box(t.size2().unwrap());
+    }
+    println!("size2 x1M:                     {:?}", start.elapsed());
+    let start = Instant::now();
+    for _ in 0..1_000_000 {
+        let _ = black_box(t.kind());
+        let _ = black_box(t.device());
+    }
+    println!("kind+device x1M:               {:?}", start.elapsed());
+
+    // Foreach AdamW on many small params: batched grad collection (1
+    // crossing) instead of 3 per param, zero_grad in 1 crossing instead of 7
+    // per param.
+    let vs = nn::VarStore::new(Device::Cpu);
+    let params: Vec<_> =
+        (0..200).map(|i| vs.root().var(&format!("p{i}"), &[64, 64], nn::Init::Randn { mean: 0., stdev: 1. })).collect();
+    let mut opt = nn::ForeachAdamW::default().build(&vs, 1e-3).unwrap();
+    let start = Instant::now();
+    for _ in 0..100 {
+        let loss = params.iter().map(|p| p.sum(Kind::Float)).reduce(|a, b| a + b).unwrap();
+        opt.backward_step(&loss);
+        opt.zero_grad();
+    }
+    println!("foreach 200-param step x100:   {:?}", start.elapsed());
+
+    // Cached imagenet mean/std: ~4 op calls per normalize instead of ~10.
+    let img = (Tensor::rand([3, 224, 224], (Kind::Float, Device::Cpu)) * 255.0).to_kind(Kind::Uint8);
+    let start = Instant::now();
+    for _ in 0..10_000 {
+        let _ = black_box(tch::vision::imagenet::normalize(&img).unwrap());
+    }
+    println!("imagenet normalize x10k:       {:?}", start.elapsed());
+
+    // LSTM single-token step loop (decode-style workload).
+    let vs = nn::VarStore::new(Device::Cpu);
+    let lstm = nn::lstm(vs.root() / "lstm", 64, 64, Default::default());
+    let input = Tensor::randn([1, 64], (Kind::Float, Device::Cpu));
+    let mut state = lstm.zero_state(1);
+    let start = Instant::now();
+    for _ in 0..100_000 {
+        state = lstm.step(&input, &state);
+    }
+    println!("lstm step x100k:               {:?}", start.elapsed());
+
+    // Dynamic-output op (null-terminated array + Vec growth on the Rust side).
+    let t = Tensor::randn([12, 64, 64], (Kind::Float, Device::Cpu));
+    let start = Instant::now();
+    for _ in 0..100_000 {
+        let _ = black_box(t.unbind(0));
+    }
+    println!("unbind(0) 12x64x64 x100k:      {:?}", start.elapsed());
 }

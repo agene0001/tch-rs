@@ -62,7 +62,9 @@ struct LayerScale {
 
 impl LayerScale {
     fn new(vs: nn::Path, dim: i64) -> Self {
-        let gamma = vs.var("gamma", &[dim], nn::Init::Const(0.));
+        // Official DINOv2 defaults to init_values=1e-5; a zero gamma would
+        // dead-end every residual branch when training from scratch.
+        let gamma = vs.var("gamma", &[dim], nn::Init::Const(1e-5));
         Self { gamma }
     }
 }

@@ -38,6 +38,42 @@ pub enum IValue {
 /// values it is handed, so freeing after the call is always correct.
 struct CIValues(Vec<*mut CIValue>);
 
+/// Marshals a tensor-pointer list across the FFI without a heap allocation
+/// for the common small-arity case; mirrors the PtrList in the generated
+/// bindings.
+enum TensorPtrList {
+    Stack([*mut C_tensor; 16], usize),
+    Heap(Vec<*mut C_tensor>),
+}
+
+impl TensorPtrList {
+    fn from_tensors<T: Borrow<Tensor>>(ts: &[T]) -> Self {
+        if ts.len() <= 16 {
+            let mut buf = [std::ptr::null_mut(); 16];
+            for (dst, t) in buf.iter_mut().zip(ts.iter()) {
+                *dst = t.borrow().c_tensor;
+            }
+            Self::Stack(buf, ts.len())
+        } else {
+            Self::Heap(ts.iter().map(|t| t.borrow().c_tensor).collect())
+        }
+    }
+
+    fn as_ptr(&self) -> *const *mut C_tensor {
+        match self {
+            Self::Stack(buf, _) => buf.as_ptr(),
+            Self::Heap(v) => v.as_ptr(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Stack(_, len) => *len,
+            Self::Heap(v) => v.len(),
+        }
+    }
+}
+
 impl CIValues {
     fn from_ivalues<'a>(
         it: impl ExactSizeIterator<Item = &'a IValue>,
@@ -308,7 +344,7 @@ impl IValue {
             IValue::String(string) => {
                 // Pass ptr+len directly: no CString copy, and strings with
                 // embedded NUL bytes round-trip as TorchScript allows.
-                ati_string_len(string.as_ptr() as *const libc::c_char, string.len() as c_int)
+                ati_string_len(string.as_ptr() as *const libc::c_char, string.len())
             }
             IValue::StringList(strings) => {
                 let mut v = vec![];
@@ -399,13 +435,13 @@ impl IValue {
             }
             9 => {
                 // Length-returning getter so embedded NUL bytes survive.
-                let mut len: c_int = 0;
+                let mut len: usize = 0;
                 let ptr = unsafe_torch_err!(ati_to_string_len(c_ivalue, &mut len));
                 if ptr.is_null() {
                     return Err(TchError::Kind("nullptr representation".to_string()));
                 }
                 let string = unsafe {
-                    let bytes = std::slice::from_raw_parts(ptr as *const u8, len as usize);
+                    let bytes = std::slice::from_raw_parts(ptr as *const u8, len);
                     let s = String::from_utf8_lossy(bytes).into_owned();
                     libc::free(ptr as *mut libc::c_void);
                     s
@@ -451,7 +487,9 @@ impl IValue {
             }
             15 => {
                 let device = unsafe_torch_err!(ati_to_device(c_ivalue));
-                IValue::Device(Device::from_c_int(device))
+                // A scripted module can return devices tch has no variant for
+                // (meta, xla, ...): surface an Err, not a panic.
+                IValue::Device(Device::f_from_c_int(device)?)
             }
             _ => return Err(TchError::Kind(format!("unhandled tag {tag}"))),
         };
@@ -529,7 +567,7 @@ impl CModule {
     /// Performs the forward pass for a model on some specified tensor inputs. This is equivalent
     /// to calling method_ts with the 'forward' method name, and returns a single tensor.
     pub fn forward_ts<T: Borrow<Tensor>>(&self, ts: &[T]) -> Result<Tensor, TchError> {
-        let ts: Vec<_> = ts.iter().map(|x| x.borrow().c_tensor).collect();
+        let ts = TensorPtrList::from_tensors(ts);
         let c_tensor =
             unsafe_torch_err!(atm_forward(self.c_module, ts.as_ptr(), ts.len() as c_int));
         Ok(Tensor { c_tensor })
@@ -552,7 +590,7 @@ impl CModule {
         method_name: &str,
         ts: &[T],
     ) -> Result<Tensor, TchError> {
-        let ts: Vec<_> = ts.iter().map(|x| x.borrow().c_tensor).collect();
+        let ts = TensorPtrList::from_tensors(ts);
         let method_name = std::ffi::CString::new(method_name)?;
         let c_tensor = unsafe_torch_err!(atm_method(
             self.c_module,

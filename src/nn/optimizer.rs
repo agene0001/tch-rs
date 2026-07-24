@@ -19,7 +19,9 @@ pub struct Optimizer {
 #[derive(Debug)]
 enum OptInner {
     C(COptimizer),
-    Foreach(ForeachOpt),
+    // Boxed: ForeachOpt carries three HashMaps of per-group overrides and
+    // would otherwise dwarf the C variant.
+    Foreach(Box<ForeachOpt>),
 }
 
 /// Optimizer configurations. These configs can be used to build optimizer.
@@ -236,6 +238,7 @@ struct ForeachOpt {
     decoupled_wd: bool,
     lr_group: HashMap<usize, f64>,
     beta1_group: HashMap<usize, f64>,
+    wd_group: HashMap<usize, f64>,
     /// Parallel to `Variables::trainable_variables`.
     states: Vec<Option<ForeachVarState>>,
 }
@@ -252,13 +255,17 @@ impl ForeachOpt {
             if self.states.len() < n {
                 self.states.resize_with(n, || None);
             }
-            let mut buckets: HashMap<(usize, Device, Kind, i64), Vec<(usize, Tensor)>> =
-                HashMap::new();
-            for (i, var) in v.trainable_variables.iter().enumerate() {
-                let grad = var.tensor.grad();
-                if !grad.defined() {
-                    continue;
-                }
+            // One FFI crossing fetches every gradient; undefined grads come
+            // back as `None` and their params are skipped, like torch.optim.
+            let params: Vec<&Tensor> = v.trainable_variables.iter().map(|v| &v.tensor).collect();
+            let grads = Tensor::f_collect_grads(&params)?;
+            // Params bucketed by (group, device, kind, step) so each bucket can
+            // go through one fused `_foreach` call.
+            type Buckets = HashMap<(usize, Device, Kind, i64), Vec<(usize, Tensor)>>;
+            let mut buckets: Buckets = HashMap::new();
+            for (i, grad) in grads.into_iter().enumerate() {
+                let Some(grad) = grad else { continue };
+                let var = &v.trainable_variables[i];
                 if self.states[i].is_none() {
                     self.states[i] = Some(ForeachVarState {
                         exp_avg: var.tensor.zeros_like(),
@@ -279,6 +286,7 @@ impl ForeachOpt {
             for ((group, _device, _kind, step), items) in buckets {
                 let lr = self.lr_group.get(&group).copied().unwrap_or(self.lr);
                 let beta1 = self.beta1_group.get(&group).copied().unwrap_or(self.beta1);
+                let wd = self.wd_group.get(&group).copied().unwrap_or(self.wd);
                 let (idxs, grads): (Vec<usize>, Vec<Tensor>) = items.into_iter().unzip();
                 let params: Vec<&Tensor> =
                     idxs.iter().map(|&i| &v.trainable_variables[i].tensor).collect();
@@ -299,7 +307,7 @@ impl ForeachOpt {
                     lr,
                     beta1,
                     self.beta2,
-                    self.wd,
+                    wd,
                     self.eps,
                     self.decoupled_wd,
                 )?;
@@ -308,23 +316,15 @@ impl ForeachOpt {
         })
     }
 
-    /// Zeroes all defined gradients, one batched `_foreach_zero_` call per
-    /// (device, dtype) bucket.
+    /// Resets all gradients to undefined in a single FFI crossing, matching
+    /// PyTorch's `zero_grad(set_to_none=True)` default and the C++ optimizer
+    /// backend: parameters that receive no gradient in a later backward are
+    /// then skipped by `step` instead of being kept in motion by weight
+    /// decay and stale momentum applied to a zero gradient.
     fn zero_grad(&self, variables: &Mutex<Variables>) -> Result<(), TchError> {
-        crate::no_grad(|| {
-            let v = variables.lock().unwrap();
-            let mut buckets: HashMap<(Device, Kind), Vec<Tensor>> = HashMap::new();
-            for var in v.trainable_variables.iter() {
-                let grad = var.tensor.grad();
-                if grad.defined() {
-                    buckets.entry((grad.device(), grad.kind())).or_default().push(grad);
-                }
-            }
-            for grads in buckets.into_values() {
-                Tensor::f_foreach_zero(&grads)?;
-            }
-            Ok(())
-        })
+        let v = variables.lock().unwrap();
+        let params: Vec<&Tensor> = v.trainable_variables.iter().map(|v| &v.tensor).collect();
+        Tensor::f_zero_grads(&params, true)
     }
 }
 
@@ -390,7 +390,7 @@ fn build_foreach(
 ) -> Result<Optimizer, TchError> {
     let v = vs.variables_.lock().unwrap();
     Ok(Optimizer {
-        opt: OptInner::Foreach(ForeachOpt {
+        opt: OptInner::Foreach(Box::new(ForeachOpt {
             lr,
             beta1,
             beta2,
@@ -400,8 +400,9 @@ fn build_foreach(
             decoupled_wd,
             lr_group: HashMap::new(),
             beta1_group: HashMap::new(),
+            wd_group: HashMap::new(),
             states: Vec::new(),
-        }),
+        })),
         variables: vs.variables_.clone(),
         variables_in_optimizer: v.trainable_variables.len(),
     })
@@ -619,22 +620,25 @@ impl Optimizer {
         variables.trainable_variables.iter().map(|v| v.tensor.shallow_clone()).collect()
     }
 
-    /// Sets the optimizer weight decay.
+    /// Sets the optimizer weight decay, clearing any per-group overrides.
     pub fn set_weight_decay(&mut self, weight_decay: f64) {
         match &mut self.opt {
             OptInner::C(opt) => opt.set_weight_decay(weight_decay).unwrap(),
-            OptInner::Foreach(opt) => opt.wd = weight_decay,
+            OptInner::Foreach(opt) => {
+                opt.wd = weight_decay;
+                opt.wd_group.clear();
+            }
         }
     }
 
-    /// Sets the optimizer weight decay.
-    ///
-    /// The foreach optimizers do not keep per-group weight decays; for them
-    /// this sets the global value.
+    /// Sets the optimizer weight decay for a variable group, leaving the
+    /// other groups on their current value.
     pub fn set_weight_decay_group(&mut self, group: usize, weight_decay: f64) {
         match &mut self.opt {
             OptInner::C(opt) => opt.set_weight_decay_group(group, weight_decay).unwrap(),
-            OptInner::Foreach(opt) => opt.wd = weight_decay,
+            OptInner::Foreach(opt) => {
+                opt.wd_group.insert(group, weight_decay);
+            }
         }
     }
 }
