@@ -25,10 +25,10 @@ impl Tensor {
     /// # Safety
     /// Undefined behavior if the given pointer is not a valid PyObject.
     pub unsafe fn pyobject_unpack(pyobject: *mut CPyObject) -> Result<Option<Self>, TchError> {
-        if !pyobject_check(pyobject)? {
+        if !unsafe { pyobject_check(pyobject)? } {
             return Ok(None);
         }
         let v = unsafe_torch_err!(python::thp_variable_unpack(pyobject));
-        Ok(Some(Tensor::from_ptr(v)))
+        Ok(Some(unsafe { Tensor::from_ptr(v) }))
     }
 }

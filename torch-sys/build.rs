@@ -73,6 +73,9 @@ fn download<P: AsRef<Path>>(source_url: &str, target_file: P) -> anyhow::Result<
     // libtorch archives are multi-GB: lift ureq 3's default 10MB body cap.
     let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
     std::io::copy(&mut reader, &mut writer)?;
+    // Errors from the implicit flush in BufWriter's Drop are discarded; a full
+    // disk would otherwise yield a silently truncated archive.
+    io::Write::flush(&mut writer)?;
     Ok(())
 }
 
@@ -138,10 +141,10 @@ fn extract<P: AsRef<Path>>(filename: P, outpath: P) -> anyhow::Result<()> {
                 outpath.as_path().display(),
                 file.size()
             );
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
-                    fs::create_dir_all(p)?;
-                }
+            if let Some(p) = outpath.parent()
+                && !p.exists()
+            {
+                fs::create_dir_all(p)?;
             }
             let mut outfile = fs::File::create(&outpath)?;
             io::copy(&mut file, &mut outfile)?;
@@ -247,10 +250,10 @@ impl SystemInfo {
                 .unwrap_or_else(|_| libtorch.clone());
             let mut version_file = libtorch;
             version_file.push("build-version");
-            if version_file.exists() {
-                if let Ok(version) = std::fs::read_to_string(&version_file) {
-                    version_check(&version)?
-                }
+            if version_file.exists()
+                && let Ok(version) = std::fs::read_to_string(&version_file)
+            {
+                version_check(&version)?
             }
             libtorch_include_dirs.push(includes.join("include"));
             libtorch_include_dirs.push(includes.join("include/torch/csrc/api/include"));
@@ -309,11 +312,13 @@ impl SystemInfo {
                 Err(_) => "cpu".to_owned(),
             };
 
-            let libtorch_dir =
-                PathBuf::from(env::var("OUT_DIR").context("OUT_DIR variable not set")?)
-                    .join("libtorch");
+            let out_dir = PathBuf::from(env::var("OUT_DIR").context("OUT_DIR variable not set")?);
+            // Qualify the extraction dir by flavor: the download is skipped
+            // whenever the dir exists, so an unqualified path would silently
+            // keep serving the previously downloaded flavor after
+            // TORCH_CUDA_VERSION changes (e.g. a CPU libtorch on a CUDA build).
+            let libtorch_dir = out_dir.join(format!("libtorch-{device}"));
             if !libtorch_dir.exists() {
-                fs::create_dir(&libtorch_dir).unwrap_or_default();
                 let libtorch_url = match os {
                 Os::Linux => format!(
                     "https://download.pytorch.org/libtorch/{}/libtorch-shared-with-deps-{}{}.zip",
@@ -348,13 +353,24 @@ impl SystemInfo {
                         // builds are not available for 2.13.0.
                         "cu126" => "%2Bcu126",
                         "cu130" => "%2Bcu130",
-                        _ => ""
+                        _ => anyhow::bail!("unsupported device {device}, TORCH_CUDA_VERSION may be set incorrectly?"),
                     }),
             };
 
-                let filename = libtorch_dir.join(format!("v{TORCH_VERSION}.zip"));
+                // Download and extract into a temporary dir, renaming into
+                // place only on success: if the final dir came into existence
+                // after a failed/interrupted download, every subsequent build
+                // would skip the download and fail against a partial tree.
+                let tmp_dir = out_dir.join(format!("libtorch-{device}.tmp"));
+                if tmp_dir.exists() {
+                    fs::remove_dir_all(&tmp_dir)?;
+                }
+                fs::create_dir(&tmp_dir)?;
+                let filename = tmp_dir.join(format!("v{TORCH_VERSION}.zip"));
                 download(&libtorch_url, &filename)?;
-                extract(&filename, &libtorch_dir)?;
+                extract(&filename, &tmp_dir)?;
+                fs::remove_file(&filename).unwrap_or_default();
+                fs::rename(&tmp_dir, &libtorch_dir)?;
             }
             Ok(libtorch_dir.join("libtorch"))
         }
@@ -402,7 +418,7 @@ impl SystemInfo {
                     // The wrapper sits on every FFI call: keep it optimized
                     // even under debug cargo profiles (it is stable glue that
                     // is rarely stepped through with a debugger).
-                    .opt_level(2)
+                    .opt_level(3)
                     .includes(&self.libtorch_include_dirs)
                     .flag(format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
                     .flag("-std=c++17")
@@ -421,7 +437,7 @@ impl SystemInfo {
                     .warnings(false)
                     // See the comment on the Linux/macOS builder: keep the
                     // FFI glue optimized even under debug cargo profiles.
-                    .opt_level(2)
+                    .opt_level(3)
                     .includes(&self.libtorch_include_dirs)
                     .flag("/std:c++17")
                     .flag("/DGLOG_USE_GLOG_EXPORT")

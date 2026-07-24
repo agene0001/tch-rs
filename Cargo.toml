@@ -3,6 +3,7 @@ name = "tch"
 version = "0.25.0"
 authors = ["Laurent Mazare <lmazare@gmail.com>"]
 edition = "2024"
+rust-version = "1.88"
 build = "build.rs"
 
 description = "Rust wrappers for the PyTorch C++ api (libtorch)."
@@ -23,7 +24,7 @@ ndarray = "0.17.2"
 rand = "0.10.2"
 thiserror = "2.0.18"
 torch-sys = { version = "0.25.0", path = "torch-sys" }
-zip = "8.6.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 half = "2"
 safetensors = "0.8.0"
 
@@ -44,6 +45,13 @@ members = [
   "pyo3-tch",
   "examples/python-extension",
 ]
+
+# Cargo only honors profile sections in the workspace root; member manifests
+# are ignored. Downstream applications resolve profiles from THEIR workspace
+# root, so mirror this block there to get the same codegen for tch code.
+[profile.release]
+lto = "thin"
+codegen-units = 1
 
 [features]
 download-libtorch = ["torch-sys/download-libtorch"]
