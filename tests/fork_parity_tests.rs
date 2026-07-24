@@ -330,7 +330,7 @@ fn orthogonal_init_keeps_shape_and_orthogonality() {
 fn embedding_padding_row_is_zero() {
     let vs = nn::VarStore::new(Device::Cpu);
     let config = nn::EmbeddingConfig { padding_idx: 2, ..Default::default() };
-    let emb = nn::embedding(vs.root(), 5, 8, config);
+    let emb = nn::embedding(&vs.root() / "padded", 5, 8, config);
 
     // PyTorch zeroes weight[padding_idx] after init.
     assert_eq!(f64::try_from(emb.ws.get(2).abs().sum(Kind::Float)).unwrap(), 0.0);
@@ -343,8 +343,9 @@ fn embedding_padding_row_is_zero() {
     assert!(f64::try_from(out.get(1).abs().sum(Kind::Float)).unwrap() > 0.0);
 
     // The default config (padding_idx = -1) means no padding handling: no row
-    // is zeroed, in particular not the last one.
-    let emb = nn::embedding(vs.root(), 5, 8, Default::default());
+    // is zeroed, in particular not the last one. (Registered under its own
+    // sub-path: duplicate variable names are an error.)
+    let emb = nn::embedding(&vs.root() / "unpadded", 5, 8, Default::default());
     assert!(f64::try_from(emb.ws.get(4).abs().sum(Kind::Float)).unwrap() > 0.0);
 }
 
@@ -1095,11 +1096,20 @@ fn inception_aux_logits() {
 // plus the final flattened weights, so the foreach (multi-tensor) optimizers
 // can be checked against libtorch's C++ reference implementations.
 fn train_tiny_net(opt_of: impl FnOnce(&nn::VarStore) -> nn::Optimizer) -> (Vec<f64>, Vec<f64>) {
-    tch::manual_seed(42);
     let vs = nn::VarStore::new(Device::Cpu);
     let root = vs.root();
-    let l1 = nn::linear(&root / "l1", 4, 8, Default::default());
-    let l2 = nn::linear(&root / "l2", 8, 1, Default::default());
+    let mut l1 = nn::linear(&root / "l1", 4, 8, Default::default());
+    let mut l2 = nn::linear(&root / "l2", 8, 1, Default::default());
+    // Overwrite the random init with deterministic, varied weights: the torch
+    // RNG is process-global, so seeding it here would still race with other
+    // tests drawing from it between the two runs being compared.
+    tch::no_grad(|| {
+        let cpu = (Kind::Float, Device::Cpu);
+        l1.ws.copy_(&((Tensor::arange(32, cpu).view([8, 4]) - 16.0) / 20.0));
+        l1.bs.as_mut().unwrap().copy_(&((Tensor::arange(8, cpu) - 4.0) / 10.0));
+        l2.ws.copy_(&((Tensor::arange(8, cpu).view([1, 8]) - 4.0) / 9.0));
+        l2.bs.as_mut().unwrap().copy_(&Tensor::from(0.1f32));
+    });
     let mut opt = opt_of(&vs);
     let xs = (Tensor::arange(20, (Kind::Float, Device::Cpu)).view([5, 4]) - 10.0) / 7.0;
     let ys = (Tensor::arange(5, (Kind::Float, Device::Cpu)).view([5, 1]) - 2.0) / 3.0;

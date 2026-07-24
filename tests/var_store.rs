@@ -34,7 +34,9 @@ fn save_and_load_var_store() {
         let v = vs.sub("a").sub("b").ones("t2", &[3]);
         let u = vs.zeros("t1", &[4]);
         let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
-        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
+        // Registering the same name twice is an error since the silent
+        // `__<n>` rename was removed; use a distinct second variable.
+        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123b", &[3]);
         (u, v)
     };
     let mut vs1 = VarStore::new(Device::Cpu);
@@ -79,7 +81,9 @@ fn save_to_stream_and_load_var_store() {
         let v = vs.sub("a").sub("b").ones("t2", &[3]);
         let u = vs.zeros("t1", &[4]);
         let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
-        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
+        // Registering the same name twice is an error since the silent
+        // `__<n>` rename was removed; use a distinct second variable.
+        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123b", &[3]);
         (u, v)
     };
     let mut vs1 = VarStore::new(Device::Cpu);
@@ -123,7 +127,9 @@ fn save_and_load_from_stream_var_store() {
         let v = vs.sub("a").sub("b").ones("t2", &[3]);
         let u = vs.zeros("t1", &[4]);
         let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
-        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
+        // Registering the same name twice is an error since the silent
+        // `__<n>` rename was removed; use a distinct second variable.
+        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123b", &[3]);
         (u, v)
     };
     let mut vs1 = VarStore::new(Device::Cpu);
@@ -167,7 +173,9 @@ fn save_and_load_partial_var_store() {
         let v = vs.sub("a").sub("b").ones("t2", &[3]);
         let u = vs.zeros("t1", &[4]);
         let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
-        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
+        // Registering the same name twice is an error since the silent
+        // `__<n>` rename was removed; use a distinct second variable.
+        let _w = vs.sub("a").sub("b").sub("ccc").ones("t123b", &[3]);
         (u, v)
     };
     let mut vs1 = VarStore::new(Device::Cpu);
@@ -299,7 +307,10 @@ fn init_test() {
     assert_eq!(vec_f64_from(&ones), [1., 1., 1.]);
     let ones = vs.root().var("t4", &[3], Init::Const(0.5));
     assert_eq!(vec_f64_from(&ones), [0.5, 0.5, 0.5]);
-    let forty_two = vs.root().var("t4", &[2], Init::Const(42.));
+    // Re-registering an existing name is an error (PyTorch semantics) rather
+    // than the silent `t4__1` rename this crate used to do.
+    assert!(vs.root().f_var("t4", &[2], Init::Const(42.)).is_err());
+    let forty_two = vs.root().var("t4b", &[2], Init::Const(42.));
     assert_eq!(vec_f64_from(&forty_two), [42., 42.]);
     let uniform = vs.root().var("t5", &[100], Init::Uniform { lo: 1.0, up: 2.0 });
     let uniform_min = f64_from(&uniform.min());
@@ -394,7 +405,8 @@ fn save_and_load_with_group() {
         let v = vs.set_group(1).sub("a").sub("b").ones("t2", &[3]);
         let u = vs.zeros("t1", &[4]);
         let _w = vs.sub("a").sub("b").sub("ccc").ones("t123", &[3]);
-        let _w = vs.sub("a").set_group(4).sub("b").sub("ccc").ones("t123", &[3]);
+        // Same-name registration errors now; keep a second variable in group 4.
+        let _w = vs.sub("a").set_group(4).sub("b").sub("ccc").ones("t123b", &[3]);
         (u, v)
     };
     let vs1 = VarStore::new(Device::Cpu);

@@ -349,7 +349,7 @@ pub fn b7(p: &nn::Path, nclasses: i64) -> impl ModuleT + use<> {
 }
 
 #[allow(clippy::many_single_char_names)]
-pub fn conv2d_same(vs: nn::Path, i: i64, o: i64, k: i64, c: ConvConfig) -> impl Module {
+pub fn conv2d_same(vs: nn::Path, i: i64, o: i64, k: i64, c: ConvConfig) -> impl Module + use<> {
     let conv2d = nn::conv2d(vs, i, o, k, c);
     let s = c.stride;
     nn::func(move |xs| {

@@ -9,10 +9,11 @@
 // The anchor symbol must be a *non-inline* exported function so its mangled
 // name is a real DLL export rather than an artifact of MSVC exporting
 // dllexport-marked inline functions instantiated inside the torch build.
-// `at::cuda::getCurrentCUDABlasHandle` is a plain TORCH_CUDA_CPP_API export
-// present from ancient PyTorch releases through current main. (An earlier
-// revision anchored on `CachingHostAllocator_emptyCache`, which is a
-// deprecated inline wrapper upstream and scheduled for removal.)
+// `at::cuda::warp_size` is a plain TORCH_CUDA_CPP_API export with a stable
+// signature. (Earlier revisions anchored on `CachingHostAllocator_emptyCache`,
+// deprecated upstream, and then `getCurrentCUDABlasHandle`, which grew a
+// defaulted `bool` parameter in libtorch 2.13 and so changed its mangled
+// name.)
 //
 // Note this function is never called at runtime: the Rust side only takes its
 // address in a `#[used]` static (src/tensor/mod.rs) / a black_box reference,
@@ -26,20 +27,15 @@ extern "C" {
     void dummy_cuda_dependency();
 }
 
-// Reproduce cublasHandle_t without pulling in the cublas headers; MSVC
-// mangling only needs the pointee type's name to match.
-struct cublasContext;
-typedef struct cublasContext* cublasHandle_t;
-
 namespace at {
 namespace cuda {
-cublasHandle_t getCurrentCUDABlasHandle();
+int warp_size();
 } // namespace cuda
 } // namespace at
 
 void dummy_cuda_dependency() {
     try {
-        at::cuda::getCurrentCUDABlasHandle();
+        at::cuda::warp_size();
     } catch (std::exception& e) {
         if (getenv("TCH_PRINT_CUDA_INIT_ERROR") != nullptr) {
             std::cerr << "error initializing cuda: " << e.what() << std::endl;
