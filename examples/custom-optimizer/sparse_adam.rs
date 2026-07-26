@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 use tch::nn::{VarStore, Variables};
-use tch::{no_grad, Device, Kind, Tensor};
+use tch::{Device, Kind, Tensor, no_grad};
 
 /// Buffer of first/second order moment for the Adam optimizer
 struct Buffer {

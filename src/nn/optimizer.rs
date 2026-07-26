@@ -294,9 +294,9 @@ impl ForeachOpt {
                     idxs.iter().map(|&i| self.states[i].as_ref().unwrap()).collect();
                 let exp_avgs: Vec<&Tensor> = states.iter().map(|s| &s.exp_avg).collect();
                 let exp_avg_sqs: Vec<&Tensor> = states.iter().map(|s| &s.exp_avg_sq).collect();
-                let max_exp_avg_sqs: Option<Vec<&Tensor>> = self.amsgrad.then(|| {
-                    states.iter().map(|s| s.max_exp_avg_sq.as_ref().unwrap()).collect()
-                });
+                let max_exp_avg_sqs: Option<Vec<&Tensor>> = self
+                    .amsgrad
+                    .then(|| states.iter().map(|s| s.max_exp_avg_sq.as_ref().unwrap()).collect());
                 Tensor::f_foreach_adam_step(
                     &params,
                     &grads,

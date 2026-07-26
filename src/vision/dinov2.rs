@@ -2,7 +2,7 @@
 //! https://github.com/facebookresearch/dinov2
 //! The weights can be extracted from pre-trained Python models
 //! using `python src/vision/export_dinov2.py`.
-use crate::{nn, IndexOp, Tensor};
+use crate::{IndexOp, Tensor, nn};
 
 const IMG_SIZE: i64 = 518;
 const PATCH_SIZE: i64 = 14;

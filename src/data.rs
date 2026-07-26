@@ -1,5 +1,5 @@
 //! Dataset iterators.
-use crate::{kind, kind::Kind, Device, IndexOp, TchError, Tensor};
+use crate::{Device, IndexOp, TchError, Tensor, kind, kind::Kind};
 use std::collections::HashMap;
 
 /// An iterator over a pair of tensors which have the same first dimension
@@ -129,10 +129,7 @@ impl Iterator for Iter2 {
                 None => (self.xs.i(start..start + size), self.ys.i(start..start + size)),
                 Some(index) => {
                     let batch_index = index.i(start..start + size);
-                    (
-                        self.xs.index_select(0, &batch_index),
-                        self.ys.index_select(0, &batch_index),
-                    )
+                    (self.xs.index_select(0, &batch_index), self.ys.index_select(0, &batch_index))
                 }
             };
             match self.device {

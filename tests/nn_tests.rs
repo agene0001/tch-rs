@@ -1,6 +1,6 @@
-use tch::nn::{group_norm, layer_norm};
 use tch::nn::{Module, OptimizerConfig};
-use tch::{kind, nn, Device, Kind, Reduction, Tensor};
+use tch::nn::{group_norm, layer_norm};
+use tch::{Device, Kind, Reduction, Tensor, kind, nn};
 
 mod test_utils;
 use test_utils::*;

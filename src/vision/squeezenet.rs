@@ -1,6 +1,6 @@
 //! SqueezeNet implementation.
 
-use crate::{nn, nn::Module, nn::ModuleT, Tensor};
+use crate::{Tensor, nn, nn::Module, nn::ModuleT};
 
 fn max_pool2d(xs: &Tensor) -> Tensor {
     xs.max_pool2d([3, 3], [2, 2], [0, 0], [1, 1], true)

@@ -1,6 +1,6 @@
 use std::fs;
 use tch::nn::OptimizerConfig;
-use tch::{nn, nn::linear, nn::Init, nn::VarStore, Device, Kind, TchError, Tensor};
+use tch::{Device, Kind, TchError, Tensor, nn, nn::Init, nn::VarStore, nn::linear};
 
 mod test_utils;
 use test_utils::*;

@@ -2,8 +2,8 @@
 // https://github.com/AlexiaJM/RelativisticGAN
 //
 // TODO: override the initializations if this does not converge well.
-use anyhow::{bail, Result};
-use tch::{kind, nn, nn::OptimizerConfig, Device, Kind, Tensor};
+use anyhow::{Result, bail};
+use tch::{Device, Kind, Tensor, kind, nn, nn::OptimizerConfig};
 
 const IMG_SIZE: i64 = 64;
 const LATENT_DIM: i64 = 128;

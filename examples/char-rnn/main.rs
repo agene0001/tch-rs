@@ -6,8 +6,8 @@
 
 use anyhow::Result;
 use tch::data::TextData;
-use tch::nn::{Linear, Module, OptimizerConfig, LSTM, RNN};
-use tch::{nn, Device, Kind, Tensor};
+use tch::nn::{LSTM, Linear, Module, OptimizerConfig, RNN};
+use tch::{Device, Kind, Tensor, nn};
 
 const LEARNING_RATE: f64 = 0.01;
 const HIDDEN_SIZE: i64 = 256;

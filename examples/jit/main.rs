@@ -1,7 +1,7 @@
 // This example illustrates how to use a PyTorch model trained and exported using the
 // Python JIT API.
 // See https://pytorch.org/tutorials/advanced/cpp_export.html for more details.
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tch::vision::imagenet;
 
 pub fn main() -> Result<()> {

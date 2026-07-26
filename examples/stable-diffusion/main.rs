@@ -40,7 +40,7 @@
 // TODO: Split this file, probably in a way similar to huggingface/diffusers.
 use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
-use tch::{kind, nn, nn::Module, Device, Kind, Tensor};
+use tch::{Device, Kind, Tensor, kind, nn, nn::Module};
 
 // The config details can be found in the "text_config" section of this json file:
 // https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
@@ -2015,11 +2015,7 @@ impl Module for Timesteps {
         } else {
             Tensor::cat(&[emb.sin(), emb.cos()], -1)
         };
-        if self.num_channels % 2 == 1 {
-            emb.pad([0, 1, 0, 0], "constant", None)
-        } else {
-            emb
-        }
+        if self.num_channels % 2 == 1 { emb.pad([0, 1, 0, 0], "constant", None) } else { emb }
     }
 }
 

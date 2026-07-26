@@ -1,12 +1,11 @@
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tch::{
-    nn,
+    Tensor, nn,
     nn::{FuncT, ModuleT},
-    Tensor,
 };
 
 #[derive(Debug)]
@@ -137,11 +136,7 @@ fn conv(vs: nn::Path, index: usize, p: i64, b: &Block) -> Result<(i64, Bl)> {
             Some(bn) => xs.apply_t(bn, train),
             None => xs,
         };
-        if leaky {
-            xs.maximum(&(&xs * 0.1))
-        } else {
-            xs
-        }
+        if leaky { xs.maximum(&(&xs * 0.1)) } else { xs }
     });
     Ok((filters, Bl::Layer(Box::new(func))))
 }
@@ -160,11 +155,7 @@ fn int_list_of_string(s: &str) -> Result<Vec<i64>> {
 }
 
 fn usize_of_index(index: usize, i: i64) -> usize {
-    if i >= 0 {
-        i as usize
-    } else {
-        (index as i64 + i) as usize
-    }
+    if i >= 0 { i as usize } else { (index as i64 + i) as usize }
 }
 
 fn route(index: usize, p: &[(i64, Bl)], block: &Block) -> Result<(i64, Bl)> {

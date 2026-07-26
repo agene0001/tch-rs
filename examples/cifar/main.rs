@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use tch::nn::{FuncT, ModuleT, OptimizerConfig, SequentialT};
-use tch::{nn, Device};
+use tch::{Device, nn};
 
 fn conv_bn(vs: &nn::Path, c_in: i64, c_out: i64) -> SequentialT {
     let conv2d_cfg = nn::ConvConfig { padding: 1, bias: false, ..Default::default() };

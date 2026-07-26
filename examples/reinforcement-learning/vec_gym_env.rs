@@ -1,5 +1,5 @@
 // Vectorized version of the gym environment.
-use cpython::{buffer::PyBuffer, NoArgs, ObjectProtocol, PyObject, PyResult, Python};
+use cpython::{NoArgs, ObjectProtocol, PyObject, PyResult, Python, buffer::PyBuffer};
 use tch::Tensor;
 
 #[derive(Debug)]

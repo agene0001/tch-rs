@@ -1,6 +1,6 @@
 //! Implement conversion traits for tensors
 use super::Tensor;
-use crate::{kind::Element, TchError};
+use crate::{TchError, kind::Element};
 use half::{bf16, f16};
 use std::convert::{TryFrom, TryInto};
 

@@ -1,7 +1,7 @@
 // CNN model. This should rearch 99.1% accuracy.
 
 use anyhow::Result;
-use tch::{nn, nn::ModuleT, nn::OptimizerConfig, Device, Tensor};
+use tch::{Device, Tensor, nn, nn::ModuleT, nn::OptimizerConfig};
 
 #[derive(Debug)]
 struct Net {

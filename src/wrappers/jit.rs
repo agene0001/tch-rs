@@ -1,7 +1,7 @@
 //! JIT interface to run model trained/saved using PyTorch Python API.
 use super::utils::path_to_cstring;
 use super::{device::Device, kind::Kind};
-use crate::{nn::Path, TchError, Tensor};
+use crate::{TchError, Tensor, nn::Path};
 use libc::{c_int, c_void};
 use std::borrow::Borrow;
 use std::convert::TryFrom;
@@ -75,9 +75,7 @@ impl TensorPtrList {
 }
 
 impl CIValues {
-    fn from_ivalues<'a>(
-        it: impl ExactSizeIterator<Item = &'a IValue>,
-    ) -> Result<Self, TchError> {
+    fn from_ivalues<'a>(it: impl ExactSizeIterator<Item = &'a IValue>) -> Result<Self, TchError> {
         let mut v = CIValues(Vec::with_capacity(it.len()));
         for x in it {
             v.0.push(x.to_c()?);

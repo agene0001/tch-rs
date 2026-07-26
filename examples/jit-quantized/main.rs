@@ -2,7 +2,7 @@
 // exported using the Python JIT API.
 // See https://pytorch.org/tutorials/advanced/cpp_export.html and
 // https://pytorch.org/docs/stable/quantization.html for more details.
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::time::SystemTime;
 use tch::vision::imagenet;
 

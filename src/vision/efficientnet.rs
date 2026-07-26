@@ -1,6 +1,6 @@
 //! EfficientNet implementation.
-use crate::nn::{self, ConvConfig, Module, ModuleT};
 use crate::Tensor;
+use crate::nn::{self, ConvConfig, Module, ModuleT};
 
 // Based on the Python version from torchvision.
 // https://github.com/pytorch/vision/blob/0d75d9e5516f446c9c0ef93bd4ed9fea13992d06/torchvision/models/efficientnet.py#L47
@@ -27,11 +27,7 @@ const CONV_WS_INIT: nn::Init = nn::Init::Kaiming {
 fn make_divisible(v: f64, divisor: i64) -> i64 {
     let min_value = divisor;
     let new_v = i64::max(min_value, (v + divisor as f64 * 0.5) as i64 / divisor * divisor);
-    if (new_v as f64) < 0.9 * v {
-        new_v + divisor
-    } else {
-        new_v
-    }
+    if (new_v as f64) < 0.9 * v { new_v + divisor } else { new_v }
 }
 
 fn bneck_confs(width_mult: f64, depth_mult: f64) -> Vec<MBConvConfig> {
@@ -128,11 +124,7 @@ impl ConvNormActivation {
 impl ModuleT for ConvNormActivation {
     fn forward_t(&self, xs: &Tensor, t: bool) -> Tensor {
         let xs = xs.apply(&self.conv2d).apply_t(&self.bn2d, t);
-        if self.activation {
-            xs.silu()
-        } else {
-            xs
-        }
+        if self.activation { xs.silu() } else { xs }
     }
 }
 
@@ -193,14 +185,28 @@ impl MBConv {
             None
         };
         let start_index = if expand_cna.is_some() { 1 } else { 0 };
-        let depthwise_cna =
-            ConvNormActivation::new(&vs / start_index, exp, exp, c.kernel, c.stride, exp, bn_config);
+        let depthwise_cna = ConvNormActivation::new(
+            &vs / start_index,
+            exp,
+            exp,
+            c.kernel,
+            c.stride,
+            exp,
+            bn_config,
+        );
         let squeeze_channels = i64::max(1, c.input_channels / 4);
         let squeeze_excitation =
             SqueezeExcitation::new(&vs / (start_index + 1), exp, squeeze_channels);
-        let project_cna =
-            ConvNormActivation::new(&vs / (start_index + 2), exp, c.out_channels, 1, 1, 1, bn_config)
-                .no_activation();
+        let project_cna = ConvNormActivation::new(
+            &vs / (start_index + 2),
+            exp,
+            c.out_channels,
+            1,
+            1,
+            1,
+            bn_config,
+        )
+        .no_activation();
         Self {
             expand_cna,
             depthwise_cna,
@@ -282,8 +288,15 @@ impl EfficientNet {
                 block_id += 1;
             }
         }
-        let final_cna =
-            ConvNormActivation::new(&f_p / (nconfigs + 1), last_out_c, final_out_c, 1, 1, 1, bn_config);
+        let final_cna = ConvNormActivation::new(
+            &f_p / (nconfigs + 1),
+            last_out_c,
+            final_out_c,
+            1,
+            1,
+            1,
+            bn_config,
+        );
         // torchvision draws the classifier weight from
         // uniform_(-init_range, init_range) with init_range =
         // 1/sqrt(out_features) and zeros its bias (from-scratch training only).

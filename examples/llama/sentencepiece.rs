@@ -1,6 +1,6 @@
 // A very naive sentencepiece encoder/decoder, this only supports the BPE model and not the unigram
 // one.
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
 pub struct Tokenizer {
     encoder: HashMap<Vec<u8>, usize>,
@@ -30,11 +30,7 @@ impl Tokenizer {
             .iter()
             .filter_map(|(key, _)| {
                 let b = key.as_bytes();
-                if b.len() == 1 {
-                    Some(b[0])
-                } else {
-                    None
-                }
+                if b.len() == 1 { Some(b[0]) } else { None }
             })
             .collect();
         let encoder = vocab

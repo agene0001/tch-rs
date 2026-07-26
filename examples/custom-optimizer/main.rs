@@ -3,7 +3,7 @@
 mod sparse_adam;
 
 use anyhow::Result;
-use tch::{nn, nn::Module, Device};
+use tch::{Device, nn, nn::Module};
 
 const IMAGE_DIM: i64 = 784;
 const HIDDEN_NODES: i64 = 128;

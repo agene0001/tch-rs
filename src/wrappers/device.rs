@@ -41,8 +41,7 @@ impl Cuda {
         #[cfg(all(target_os = "windows", use_cuda))]
         std::hint::black_box(torch_sys::dummy_cuda_dependency as *const ());
         static IS_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *IS_AVAILABLE
-            .get_or_init(|| unsafe_torch!(torch_sys::cuda::atc_cuda_is_available()) != 0)
+        *IS_AVAILABLE.get_or_init(|| unsafe_torch!(torch_sys::cuda::atc_cuda_is_available()) != 0)
     }
 
     /// Returns true if CUDA is available, and CuDNN is available.
@@ -156,11 +155,7 @@ impl Device {
 
     /// Returns a GPU device if available, else default to CPU.
     pub fn cuda_if_available() -> Device {
-        if Cuda::is_available() {
-            Device::Cuda(0)
-        } else {
-            Device::Cpu
-        }
+        if Cuda::is_available() { Device::Cuda(0) } else { Device::Cpu }
     }
 
     pub fn is_cuda(self) -> bool {

@@ -8,7 +8,7 @@
 //   Or the other way around.
 //     tensor-tools cp src.ot dst.npz
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 
 pub fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();

@@ -1,7 +1,7 @@
 use anyhow::Result;
+use tch::TrainableCModule;
 use tch::nn::{Adam, ModuleT, OptimizerConfig, VarStore};
 use tch::vision::dataset::Dataset;
-use tch::TrainableCModule;
 use tch::{CModule, Device};
 
 fn train_and_save_model(dataset: &Dataset, device: Device) -> Result<()> {

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tch::{kind::FLOAT_CUDA, nn, nn::ModuleT, nn::OptimizerConfig, CModule, Device, Tensor};
+use tch::{CModule, Device, Tensor, kind::FLOAT_CUDA, nn, nn::ModuleT, nn::OptimizerConfig};
 
 #[derive(Debug)]
 struct Net {

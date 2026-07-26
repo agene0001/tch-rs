@@ -1,7 +1,7 @@
 #[cfg(test)]
 #[cfg(feature = "cuda-tests")]
 mod tests {
-    use tch::{autocast, Device, Kind, Tensor};
+    use tch::{Device, Kind, Tensor, autocast};
 
     #[test]
     fn autocast_narrows_type() {
@@ -23,7 +23,7 @@ mod tests {
 
 #[cfg(test)]
 mod cpu_tests {
-    use tch::{autocast_device, Device, Kind, Tensor};
+    use tch::{Device, Kind, Tensor, autocast_device};
 
     #[test]
     fn autocast_device_cpu_narrows_to_bf16() {
@@ -46,8 +46,7 @@ mod cpu_tests {
     fn autocast_device_explicit_dtype() {
         let linear = Tensor::rand([10, 10], (Kind::Float, Device::Cpu));
         let input = Tensor::rand([10], (Kind::Float, Device::Cpu));
-        let output =
-            autocast_device(Device::Cpu, Some(Kind::Half), true, || linear.matmul(&input));
+        let output = autocast_device(Device::Cpu, Some(Kind::Half), true, || linear.matmul(&input));
         assert_eq!(output.kind(), Kind::Half);
     }
 }

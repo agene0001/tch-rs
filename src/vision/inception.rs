@@ -1,5 +1,5 @@
 //! InceptionV3.
-use crate::{nn, nn::ModuleT, Tensor};
+use crate::{Tensor, nn, nn::ModuleT};
 
 // torchvision initializes every Inception conv/linear weight with
 // trunc_normal_(mean=0, std=<module stddev, default 0.1>, a=-2, b=2); the aux
@@ -32,11 +32,24 @@ fn conv_bn_std(
         .add_fn(|xs| xs.relu())
 }
 
-fn conv_bn(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, pad: i64, stride: i64) -> impl ModuleT + use<> {
+fn conv_bn(
+    p: nn::Path,
+    c_in: i64,
+    c_out: i64,
+    ksize: i64,
+    pad: i64,
+    stride: i64,
+) -> impl ModuleT + use<> {
     conv_bn_std(p, c_in, c_out, ksize, pad, stride, 0.1)
 }
 
-fn conv_bn2(p: nn::Path, c_in: i64, c_out: i64, ksize: [i64; 2], pad: [i64; 2]) -> impl ModuleT + use<> {
+fn conv_bn2(
+    p: nn::Path,
+    c_in: i64,
+    c_out: i64,
+    ksize: [i64; 2],
+    pad: [i64; 2],
+) -> impl ModuleT + use<> {
     let conv2d_cfg = nn::ConvConfigND::<[i64; 2]> {
         padding: pad,
         bias: false,
@@ -313,9 +326,8 @@ pub fn v3_with(p: &nn::Path, nclasses: i64, config: InceptionV3Config) -> Incept
             nclasses,
             nn::LinearConfig { ws_init: trunc_normal(0.1), ..Default::default() },
         ));
-    let transform = config
-        .transform_input
-        .then(|| transform_constants(p.device(), crate::Kind::Float));
+    let transform =
+        config.transform_input.then(|| transform_constants(p.device(), crate::Kind::Float));
     InceptionV3 { transform, pre_aux, post_aux, aux }
 }
 

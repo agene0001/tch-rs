@@ -60,7 +60,12 @@ pub trait RNN {
     ///
     /// Like PyTorch's `module.training`, `train` controls the inter-layer
     /// dropout at call time. The default implementation ignores it.
-    fn seq_init_t(&self, input: &Tensor, state: &Self::State, train: bool) -> (Tensor, Self::State) {
+    fn seq_init_t(
+        &self,
+        input: &Tensor,
+        state: &Self::State,
+        train: bool,
+    ) -> (Tensor, Self::State) {
         let _ = train;
         self.seq_init(input, state)
     }
@@ -145,11 +150,8 @@ fn rnn_weights<'a, T: Borrow<super::Path<'a>>>(
         for direction_idx in 0..num_directions {
             let in_dim = if layer_idx == 0 { in_dim } else { hidden_dim * num_directions };
             let suffix = if direction_idx == 1 { "_reverse" } else { "" };
-            let w_ih = vs.var(
-                &format!("weight_ih_l{layer_idx}{suffix}"),
-                &[gate_dim, in_dim],
-                w_ih_init,
-            );
+            let w_ih =
+                vs.var(&format!("weight_ih_l{layer_idx}{suffix}"), &[gate_dim, in_dim], w_ih_init);
             let w_hh = vs.var(
                 &format!("weight_hh_l{layer_idx}{suffix}"),
                 &[gate_dim, hidden_dim],
@@ -158,10 +160,8 @@ fn rnn_weights<'a, T: Borrow<super::Path<'a>>>(
             flat_weights.push(w_ih);
             flat_weights.push(w_hh);
             if c.has_biases {
-                let b_ih =
-                    vs.var(&format!("bias_ih_l{layer_idx}{suffix}"), &[gate_dim], b_ih_init);
-                let b_hh =
-                    vs.var(&format!("bias_hh_l{layer_idx}{suffix}"), &[gate_dim], b_hh_init);
+                let b_ih = vs.var(&format!("bias_ih_l{layer_idx}{suffix}"), &[gate_dim], b_ih_init);
+                let b_hh = vs.var(&format!("bias_hh_l{layer_idx}{suffix}"), &[gate_dim], b_hh_init);
                 flat_weights.push(b_ih);
                 flat_weights.push(b_hh);
             }

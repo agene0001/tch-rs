@@ -113,11 +113,7 @@ fn get_pypi_wheel_url_for_aarch64_macosx() -> anyhow::Result<String> {
     let urls = pypi_package.urls;
     let expected_filename = format!("torch-{TORCH_VERSION}-cp312-cp312-macosx_14_0_arm64.whl");
     let url = urls.iter().find_map(|pypi_url: &PyPiPackageUrl| {
-        if pypi_url.filename == expected_filename {
-            Some(pypi_url.url.clone())
-        } else {
-            None
-        }
+        if pypi_url.filename == expected_filename { Some(pypi_url.url.clone()) } else { None }
     });
     url.context("Failed to find arm64 macosx wheel from pypi")
 }
@@ -174,7 +170,9 @@ fn version_check(version: &str) -> Result<()> {
         Some((version, _)) => version,
     };
     if version != TORCH_VERSION {
-        anyhow::bail!("this tch version expects PyTorch {TORCH_VERSION}, got {version}, this check can be bypassed by setting the LIBTORCH_BYPASS_VERSION_CHECK environment variable")
+        anyhow::bail!(
+            "this tch version expects PyTorch {TORCH_VERSION}, got {version}, this check can be bypassed by setting the LIBTORCH_BYPASS_VERSION_CHECK environment variable"
+        )
     }
     Ok(())
 }
@@ -320,20 +318,24 @@ impl SystemInfo {
             let libtorch_dir = out_dir.join(format!("libtorch-{device}"));
             if !libtorch_dir.exists() {
                 let libtorch_url = match os {
-                Os::Linux => format!(
-                    "https://download.pytorch.org/libtorch/{}/libtorch-shared-with-deps-{}{}.zip",
-                    device, TORCH_VERSION, match device.as_ref() {
-                        "cpu" => "%2Bcpu",
-                        // Flavors published for this libtorch release; older cu1xx
-                        // builds are not available for 2.13.0.
-                        "cu126" => "%2Bcu126",
-                        "cu130" => "%2Bcu130",
-                        _ => anyhow::bail!("unsupported device {device}, TORCH_CUDA_VERSION may be set incorrectly?"),
-                    }
-                ),
-                Os::Macos => {
-                    if env::var("CARGO_CFG_TARGET_ARCH") == Ok(String::from("aarch64")) {
-                        get_pypi_wheel_url_for_aarch64_macosx().expect(
+                    Os::Linux => format!(
+                        "https://download.pytorch.org/libtorch/{}/libtorch-shared-with-deps-{}{}.zip",
+                        device,
+                        TORCH_VERSION,
+                        match device.as_ref() {
+                            "cpu" => "%2Bcpu",
+                            // Flavors published for this libtorch release; older cu1xx
+                            // builds are not available for 2.13.0.
+                            "cu126" => "%2Bcu126",
+                            "cu130" => "%2Bcu130",
+                            _ => anyhow::bail!(
+                                "unsupported device {device}, TORCH_CUDA_VERSION may be set incorrectly?"
+                            ),
+                        }
+                    ),
+                    Os::Macos => {
+                        if env::var("CARGO_CFG_TARGET_ARCH") == Ok(String::from("aarch64")) {
+                            get_pypi_wheel_url_for_aarch64_macosx().expect(
                             "Failed to retrieve torch from pypi.  Pre-built version of libtorch for apple silicon are not available.
                             You can install torch manually following the indications from https://github.com/LaurentMazare/tch-rs/issues/629
                             pip3 install torch=={TORCH_VERSION}
@@ -341,21 +343,28 @@ impl SystemInfo {
                             export LIBTORCH=$(python3 -c 'import torch; from pathlib import Path; print(Path(torch.__file__).parent)')
                             export DYLD_LIBRARY_PATH=${{LIBTORCH}}/lib
                             ")
-                    } else {
-                        format!("https://download.pytorch.org/libtorch/cpu/libtorch-macos-x86_64-{TORCH_VERSION}.zip")
+                        } else {
+                            format!(
+                                "https://download.pytorch.org/libtorch/cpu/libtorch-macos-x86_64-{TORCH_VERSION}.zip"
+                            )
+                        }
                     }
-                },
-                Os::Windows => format!(
-                    "https://download.pytorch.org/libtorch/{}/libtorch-win-shared-with-deps-{}{}.zip",
-                    device, TORCH_VERSION, match device.as_ref() {
-                        "cpu" => "%2Bcpu",
-                        // Flavors published for this libtorch release; older cu1xx
-                        // builds are not available for 2.13.0.
-                        "cu126" => "%2Bcu126",
-                        "cu130" => "%2Bcu130",
-                        _ => anyhow::bail!("unsupported device {device}, TORCH_CUDA_VERSION may be set incorrectly?"),
-                    }),
-            };
+                    Os::Windows => format!(
+                        "https://download.pytorch.org/libtorch/{}/libtorch-win-shared-with-deps-{}{}.zip",
+                        device,
+                        TORCH_VERSION,
+                        match device.as_ref() {
+                            "cpu" => "%2Bcpu",
+                            // Flavors published for this libtorch release; older cu1xx
+                            // builds are not available for 2.13.0.
+                            "cu126" => "%2Bcu126",
+                            "cu130" => "%2Bcu130",
+                            _ => anyhow::bail!(
+                                "unsupported device {device}, TORCH_CUDA_VERSION may be set incorrectly?"
+                            ),
+                        }
+                    ),
+                };
 
                 // Download and extract into a temporary dir, renaming into
                 // place only on success: if the final dir came into existence

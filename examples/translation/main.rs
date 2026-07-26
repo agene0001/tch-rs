@@ -12,7 +12,7 @@
 use anyhow::Result;
 use rand::prelude::*;
 use tch::nn::{GRUState, Module, OptimizerConfig, RNN};
-use tch::{nn, Device, Kind, Tensor};
+use tch::{Device, Kind, Tensor, nn};
 
 mod dataset;
 use dataset::Dataset;

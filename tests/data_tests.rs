@@ -1,5 +1,5 @@
 use std::io::Write;
-use tch::{data, IndexOp, Tensor};
+use tch::{IndexOp, Tensor, data};
 
 mod test_utils;
 use test_utils::*;

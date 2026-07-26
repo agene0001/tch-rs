@@ -1,6 +1,6 @@
 //! Helper functions for ImageNet like datasets.
 use super::dataset::Dataset;
-use crate::{kind, Device, Kind, TchError, Tensor};
+use crate::{Device, Kind, TchError, Tensor, kind};
 use std::io;
 use std::path::Path;
 
@@ -76,11 +76,7 @@ fn crop_offset(full: i64, crop: i64) -> i64 {
         return 0;
     }
     let k = d / 2;
-    if d % 2 == 0 || k % 2 == 0 {
-        k
-    } else {
-        k + 1
-    }
+    if d % 2 == 0 || k % 2 == 0 { k } else { k + 1 }
 }
 
 // Centered 224x224 crop of a [3, h, w] image with torchvision's rounding

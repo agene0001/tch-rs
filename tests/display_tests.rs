@@ -1,4 +1,4 @@
-use tch::{kind, Tensor};
+use tch::{Tensor, kind};
 
 #[test]
 fn display_scalar() {

@@ -7,7 +7,7 @@
 // https://github.com/openai/spinningup/blob/master/spinup/examples/pg_math/2_rtg_pg.py
 
 use super::gym_env::{GymEnv, Step};
-use tch::{nn, nn::OptimizerConfig, Kind::Float, Tensor};
+use tch::{Kind::Float, Tensor, nn, nn::OptimizerConfig};
 
 fn model(p: &nn::Path, input_shape: &[i64], nact: i64) -> impl nn::Module + use<> {
     let nin = input_shape.iter().product::<i64>();

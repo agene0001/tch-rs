@@ -14,7 +14,7 @@
 //! - bulk reads in `Tensor::iter` and stack-allocated `sizeN()`.
 use std::convert::TryFrom;
 use tch::nn::{self, Module, OptimizerConfig, RNN};
-use tch::{data::Iter2, Device, Kind, Tensor};
+use tch::{Device, Kind, Tensor, data::Iter2};
 
 #[test]
 fn scalar_div_float_tensor_is_exact() {
@@ -202,8 +202,7 @@ fn cross_entropy_matches_log_softmax_nll() {
     let logits = Tensor::randn([8, 5], (Kind::Float, Device::Cpu));
     let targets = Tensor::from_slice(&[0i64, 1, 2, 3, 4, 0, 1, 2]);
     let fused = f64::try_from(logits.cross_entropy_for_logits(&targets)).unwrap();
-    let reference =
-        f64::try_from(logits.log_softmax(-1, Kind::Float).nll_loss(&targets)).unwrap();
+    let reference = f64::try_from(logits.log_softmax(-1, Kind::Float).nll_loss(&targets)).unwrap();
     assert!((fused - reference).abs() < 1e-6, "{fused} vs {reference}");
 }
 
@@ -1023,10 +1022,7 @@ fn relu6_single_kernel_matches_reference() {
     let t = Tensor::arange_start(-3, 9, (Kind::Float, Device::Cpu));
     let fused = t.clamp(0., 6.);
     let reference = t.relu().clamp_max(6.);
-    assert_eq!(
-        Vec::<f32>::try_from(fused).unwrap(),
-        Vec::<f32>::try_from(reference).unwrap()
-    );
+    assert_eq!(Vec::<f32>::try_from(fused).unwrap(), Vec::<f32>::try_from(reference).unwrap());
 }
 
 #[test]
@@ -1140,8 +1136,7 @@ fn assert_all_close(a: &[f64], b: &[f64], tol: f64, what: &str) {
 #[test]
 fn foreach_adamw_matches_cpp_adamw() {
     let (l_ref, w_ref) = train_tiny_net(|vs| nn::AdamW::default().build(vs, 1e-2).unwrap());
-    let (l_new, w_new) =
-        train_tiny_net(|vs| nn::ForeachAdamW::default().build(vs, 1e-2).unwrap());
+    let (l_new, w_new) = train_tiny_net(|vs| nn::ForeachAdamW::default().build(vs, 1e-2).unwrap());
     assert_all_close(&l_ref, &l_new, 1e-6, "losses");
     assert_all_close(&w_ref, &w_new, 1e-6, "weights");
 }
@@ -1151,8 +1146,7 @@ fn foreach_adam_matches_cpp_adam_with_l2() {
     // wd != 0 exercises the L2 (non-decoupled) branch, amsgrad the running
     // max of the second moment.
     let cfg = |amsgrad| nn::Adam { wd: 0.1, amsgrad, ..Default::default() };
-    let fcfg =
-        |amsgrad| nn::ForeachAdam { wd: 0.1, amsgrad, ..Default::default() };
+    let fcfg = |amsgrad| nn::ForeachAdam { wd: 0.1, amsgrad, ..Default::default() };
     for amsgrad in [false, true] {
         let (l_ref, w_ref) = train_tiny_net(|vs| cfg(amsgrad).build(vs, 1e-2).unwrap());
         let (l_new, w_new) = train_tiny_net(|vs| fcfg(amsgrad).build(vs, 1e-2).unwrap());
@@ -1233,8 +1227,11 @@ fn bench_round3_optimizations() {
     // crossing) instead of 3 per param, zero_grad in 1 crossing instead of 7
     // per param.
     let vs = nn::VarStore::new(Device::Cpu);
-    let params: Vec<_> =
-        (0..200).map(|i| vs.root().var(&format!("p{i}"), &[64, 64], nn::Init::Randn { mean: 0., stdev: 1. })).collect();
+    let params: Vec<_> = (0..200)
+        .map(|i| {
+            vs.root().var(&format!("p{i}"), &[64, 64], nn::Init::Randn { mean: 0., stdev: 1. })
+        })
+        .collect();
     let mut opt = nn::ForeachAdamW::default().build(&vs, 1e-3).unwrap();
     let start = Instant::now();
     for _ in 0..100 {
@@ -1245,7 +1242,8 @@ fn bench_round3_optimizations() {
     println!("foreach 200-param step x100:   {:?}", start.elapsed());
 
     // Cached imagenet mean/std: ~4 op calls per normalize instead of ~10.
-    let img = (Tensor::rand([3, 224, 224], (Kind::Float, Device::Cpu)) * 255.0).to_kind(Kind::Uint8);
+    let img =
+        (Tensor::rand([3, 224, 224], (Kind::Float, Device::Cpu)) * 255.0).to_kind(Kind::Uint8);
     let start = Instant::now();
     for _ in 0..10_000 {
         let _ = black_box(tch::vision::imagenet::normalize(&img).unwrap());

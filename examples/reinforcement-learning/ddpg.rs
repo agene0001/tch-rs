@@ -8,12 +8,12 @@
 */
 use super::gym_env::GymEnv;
 use tch::{
-    kind::{FLOAT_CPU, INT64_CPU},
-    nn,
-    nn::OptimizerConfig,
     Device,
     Kind::Float,
     Tensor,
+    kind::{FLOAT_CPU, INT64_CPU},
+    nn,
+    nn::OptimizerConfig,
 };
 
 // The impact of the q value of the next state on the current state's q value.

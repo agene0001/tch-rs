@@ -105,7 +105,13 @@ pub fn resnet34_no_final_layer(p: &nn::Path) -> FuncT<'static> {
 
 // Bottleneck versions for ResNet 50, 101, and 152.
 
-fn bottleneck_block(p: nn::Path, c_in: i64, c_out: i64, stride: i64, e: i64) -> impl ModuleT + use<> {
+fn bottleneck_block(
+    p: nn::Path,
+    c_in: i64,
+    c_out: i64,
+    stride: i64,
+    e: i64,
+) -> impl ModuleT + use<> {
     let e_dim = e * c_out;
     let conv1 = conv2d(&p / "conv1", c_in, c_out, 1, 0, 1);
     let bn1 = nn::batch_norm2d(&p / "bn1", c_out, Default::default());
@@ -128,7 +134,13 @@ fn bottleneck_block(p: nn::Path, c_in: i64, c_out: i64, stride: i64, e: i64) -> 
     })
 }
 
-fn bottleneck_layer(p: nn::Path, c_in: i64, c_out: i64, stride: i64, cnt: i64) -> impl ModuleT + use<> {
+fn bottleneck_layer(
+    p: nn::Path,
+    c_in: i64,
+    c_out: i64,
+    stride: i64,
+    cnt: i64,
+) -> impl ModuleT + use<> {
     let mut layer = nn::seq_t().add(bottleneck_block(&p / "0", c_in, c_out, stride, 4));
     for block_index in 1..cnt {
         layer = layer.add(bottleneck_block(&p / &block_index.to_string(), 4 * c_out, c_out, 1, 4))

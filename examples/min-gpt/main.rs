@@ -4,10 +4,10 @@
    This is mostly a rust port of https://github.com/karpathy/minGPT
 */
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tch::data::TextData;
 use tch::nn::{ModuleT, OptimizerConfig};
-use tch::{nn, Device, IndexOp, Kind, Tensor};
+use tch::{Device, IndexOp, Kind, Tensor, nn};
 
 const LEARNING_RATE: f64 = 0.0003;
 const BLOCK_SIZE: i64 = 128;

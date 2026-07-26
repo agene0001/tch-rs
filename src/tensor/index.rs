@@ -291,17 +291,15 @@ where
 
 impl Tensor {
     fn f_indexer(&self, index_spec: &[TensorIndexer]) -> Result<Tensor> {
-        use std::ops::Bound::*;
         use TensorIndexer::*;
+        use std::ops::Bound::*;
 
         // Make sure n. non-newaxis does not exceed n. of dimensions
         let n_newaxis = index_spec.iter().filter(|spec| *spec == &InsertNewAxis).count();
 
         let dim = self.dim();
         if index_spec.len() > dim + n_newaxis {
-            return Err(TchError::Shape(format!(
-                "too many indices for tensor of dimension {dim}"
-            )));
+            return Err(TchError::Shape(format!("too many indices for tensor of dimension {dim}")));
         }
 
         // Make sure tensors conform the format
@@ -319,7 +317,9 @@ impl Tensor {
                     Int8 => {}
                     Int => {}
                     _ => {
-                        return Err(TchError::Kind(format!("the kind of tensors used as indices must be one of {Int64:?}, {Int16:?}, {Int8:?}, {Int:?}")));
+                        return Err(TchError::Kind(format!(
+                            "the kind of tensors used as indices must be one of {Int64:?}, {Int16:?}, {Int8:?}, {Int:?}"
+                        )));
                     }
                 }
             }

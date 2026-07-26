@@ -1,4 +1,4 @@
-use tch::{kind, Tensor};
+use tch::{Tensor, kind};
 
 fn grad_example() {
     let mut x = Tensor::from(2.0).set_requires_grad(true);

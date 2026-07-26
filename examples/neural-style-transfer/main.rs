@@ -2,9 +2,9 @@
 //   https://pytorch.org/tutorials/advanced/neural_style_tutorial.html
 // The pre-trained weights for the VGG16 model can be downloaded from:
 //   https://github.com/LaurentMazare/tch-rs/releases/download/mw/vgg16.ot
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tch::vision::{imagenet, vgg};
-use tch::{nn, nn::OptimizerConfig, Device, Tensor};
+use tch::{Device, Tensor, nn, nn::OptimizerConfig};
 
 const STYLE_WEIGHT: f64 = 1e6;
 const LEARNING_RATE: f64 = 1e-1;

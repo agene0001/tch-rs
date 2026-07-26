@@ -1,5 +1,5 @@
 use super::Tensor;
-use crate::{kind::Element, TchError};
+use crate::{TchError, kind::Element};
 
 /// An iterator over the elements of a one dimensional tensor.
 ///

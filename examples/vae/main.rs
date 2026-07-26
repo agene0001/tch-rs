@@ -11,7 +11,7 @@
 */
 
 use anyhow::Result;
-use tch::{nn, nn::Module, nn::OptimizerConfig, Kind, Reduction, Tensor};
+use tch::{Kind, Reduction, Tensor, nn, nn::Module, nn::OptimizerConfig};
 
 struct Vae {
     fc1: nn::Linear,

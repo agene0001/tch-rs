@@ -1,4 +1,4 @@
-use tch::{nn, vision, Tensor};
+use tch::{Tensor, nn, vision};
 
 #[test]
 fn mobilenet() {

@@ -1,7 +1,7 @@
 // This should rearch 91.5% accuracy.
 
 use anyhow::Result;
-use tch::{kind, no_grad, vision, Kind, Tensor};
+use tch::{Kind, Tensor, kind, no_grad, vision};
 
 const IMAGE_DIM: i64 = 784;
 const LABELS: i64 = 10;

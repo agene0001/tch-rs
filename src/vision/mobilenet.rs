@@ -51,11 +51,7 @@ fn inv(p: nn::Path, c_in: i64, c_out: i64, stride: i64, er: i64) -> impl ModuleT
         .add(nn::batch_norm2d(&p / (id + 2), c_out, Default::default()));
     nn::func_t(move |xs, train| {
         let ys = xs.apply_t(&conv, train);
-        if stride == 1 && c_in == c_out {
-            xs + ys
-        } else {
-            ys
-        }
+        if stride == 1 && c_in == c_out { xs + ys } else { ys }
     })
 }
 

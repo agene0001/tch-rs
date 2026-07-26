@@ -23,10 +23,10 @@
 mod coco_classes;
 mod darknet;
 
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
+use tch::Tensor;
 use tch::nn::ModuleT;
 use tch::vision::image;
-use tch::Tensor;
 const CONFIG_NAME: &str = "examples/yolo/yolo-v3.cfg";
 const CONFIDENCE_THRESHOLD: f64 = 0.5;
 const NMS_THRESHOLD: f64 = 0.4;

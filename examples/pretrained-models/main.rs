@@ -22,7 +22,7 @@
 // https://github.com/LaurentMazare/ocaml-torch/releases/download/v0.1-unstable/convmixer1024_20.ot
 // In order to obtain the dinov2 weights, e.g. dinov2_vits14.safetensors, run the
 // src/vision/export_dinov2.py
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tch::nn::ModuleT;
 use tch::vision::{
     alexnet, convmixer, densenet, dinov2, efficientnet, imagenet, inception, mobilenet, resnet,

@@ -3,7 +3,7 @@
 //! This library tries to stay as close as possible to the original
 //! Python and C++ implementations.
 pub mod init;
-pub use init::{f_init, init, Init};
+pub use init::{Init, f_init, init};
 
 mod var_store;
 pub use var_store::{Path, VarStore, Variables};
@@ -43,8 +43,8 @@ pub use sequential::*;
 
 mod optimizer;
 pub use optimizer::{
-    adam, adamw, foreach_adam, foreach_adamw, rms_prop, sgd, Adam, AdamW, ForeachAdam,
-    ForeachAdamW, Optimizer, OptimizerConfig, RmsProp, Sgd,
+    Adam, AdamW, ForeachAdam, ForeachAdamW, Optimizer, OptimizerConfig, RmsProp, Sgd, adam, adamw,
+    foreach_adam, foreach_adamw, rms_prop, sgd,
 };
 
 /// An identity layer. This just propagates its tensor input as output.

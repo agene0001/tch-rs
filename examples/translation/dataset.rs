@@ -1,5 +1,5 @@
 use super::lang;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 

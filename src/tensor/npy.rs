@@ -102,7 +102,7 @@ impl Header {
                     _ => {
                         return Err(TchError::FileFormat(format!(
                             "unable to parse header {header}"
-                        )))
+                        )));
                     }
                 }
             }
@@ -115,7 +115,7 @@ impl Header {
                 _ => {
                     return Err(TchError::FileFormat(format!(
                         "unknown fortran_order {fortran_order}"
-                    )))
+                    )));
                 }
             },
         };
@@ -148,7 +148,7 @@ impl Header {
                     "F" | "F4" | "c8" => Kind::ComplexFloat,
                     "D" | "F8" | "c16" => Kind::ComplexDouble,
                     descr => {
-                        return Err(TchError::FileFormat(format!("unrecognized descr {descr}")))
+                        return Err(TchError::FileFormat(format!("unrecognized descr {descr}")));
                     }
                 }
             }

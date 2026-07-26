@@ -7,7 +7,7 @@
 //! divergence (wrong stride/padding/eps/naming).
 use std::convert::TryFrom;
 use tch::nn::ModuleT;
-use tch::{nn, vision, Device, Tensor};
+use tch::{Device, Tensor, nn, vision};
 
 fn fixture_dir() -> String {
     std::env::var("TCH_VISION_PARITY_DIR").unwrap_or_else(|_| "/tmp/tv_parity".to_string())

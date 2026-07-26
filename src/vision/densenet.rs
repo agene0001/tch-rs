@@ -5,7 +5,7 @@
 //!
 //! Pre-trained weights for the densenet-121 variants can be found here:
 //! <https://github.com/LaurentMazare/tch-rs/releases/download/mw/densenet121.ot>
-use crate::{nn, nn::Conv2D, nn::ModuleT, Tensor};
+use crate::{Tensor, nn, nn::Conv2D, nn::ModuleT};
 
 fn conv2d(p: nn::Path, c_in: i64, c_out: i64, ksize: i64, padding: i64, stride: i64) -> Conv2D {
     // torchvision initializes every DenseNet conv with kaiming_normal_ using
@@ -35,7 +35,13 @@ fn dense_layer(p: nn::Path, c_in: i64, bn_size: i64, growth: i64) -> impl Module
     })
 }
 
-fn dense_block(p: nn::Path, c_in: i64, bn_size: i64, growth: i64, nlayers: i64) -> impl ModuleT + use<> {
+fn dense_block(
+    p: nn::Path,
+    c_in: i64,
+    bn_size: i64,
+    growth: i64,
+    nlayers: i64,
+) -> impl ModuleT + use<> {
     let mut seq = nn::seq_t();
     for i in 0..nlayers {
         seq = seq.add(dense_layer(

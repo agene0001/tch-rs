@@ -10,7 +10,7 @@ mod ops;
 mod safetensors;
 
 pub use super::wrappers::tensor::{
-    autocast, autocast_device, no_grad, no_grad_guard, with_grad, NoGradGuard, Reduction, Tensor,
+    NoGradGuard, Reduction, Tensor, autocast, autocast_device, no_grad, no_grad_guard, with_grad,
 };
 pub use index::{IndexOp, NewAxis, TensorIndexer};
 
@@ -235,8 +235,11 @@ impl Tensor {
         // building two Vecs and concatenating them.
         let mut shape = self.size();
         shape.push(labels);
-        Tensor::zeros(shape, (Kind::Float, self.device()))
-            .scatter_value_(-1, &self.unsqueeze(-1).to_kind(Kind::Int64), 1.0)
+        Tensor::zeros(shape, (Kind::Float, self.device())).scatter_value_(
+            -1,
+            &self.unsqueeze(-1).to_kind(Kind::Int64),
+            1.0,
+        )
     }
 
     /// Copies a tensor to a newly allocated tensor using the same shape and device.
@@ -284,5 +287,4 @@ impl Tensor {
 // regardless of symbol use and don't need the anchor.
 #[cfg(all(target_os = "windows", use_cuda))]
 #[used]
-static FORCE_TORCH_CUDA_LINK: [unsafe extern "C" fn(); 1] =
-    [torch_sys::dummy_cuda_dependency];
+static FORCE_TORCH_CUDA_LINK: [unsafe extern "C" fn(); 1] = [torch_sys::dummy_cuda_dependency];

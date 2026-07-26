@@ -47,9 +47,7 @@ pub fn layer_norm<'a, T: Borrow<super::Path<'a>>>(
 
     let (ws, bs) = if config.elementwise_affine {
         let ws = vs.var("weight", normalized_shape.as_slice(), config.ws_init);
-        let bs = config
-            .bias
-            .then(|| vs.var("bias", normalized_shape.as_slice(), config.bs_init));
+        let bs = config.bias.then(|| vs.var("bias", normalized_shape.as_slice(), config.bs_init));
         (Some(ws), bs)
     } else {
         (None, None)

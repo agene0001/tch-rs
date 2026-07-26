@@ -8,8 +8,7 @@ fn block(p: nn::Path, dim: i64, kernel_size: i64) -> impl nn::ModuleT + use<> {
     // With stride 1 and an odd kernel, PyTorch's padding="same" is exactly the
     // symmetric static padding k / 2 — no need for the dynamic zero_pad2d copy
     // that conv2d_same performs on every forward.
-    let conv2d_cfg =
-        nn::ConvConfig { groups: dim, padding: kernel_size / 2, ..Default::default() };
+    let conv2d_cfg = nn::ConvConfig { groups: dim, padding: kernel_size / 2, ..Default::default() };
     let p_fn = &(&p / "0") / "fn";
     let conv1 = nn::conv2d(&p_fn / "0", dim, dim, kernel_size, conv2d_cfg);
     let bn1 = nn::batch_norm2d(&p_fn / "2", dim, Default::default());

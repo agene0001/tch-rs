@@ -1,10 +1,6 @@
 use super::stream::ReadSeekAdapter;
 use super::utils::{path_to_cstring, ptr_to_string};
-use super::{
-    device::Device,
-    kind,
-    kind::Kind,
-};
+use super::{device::Device, kind, kind::Kind};
 use crate::TchError;
 use libc::{c_char, c_int, c_void};
 use std::borrow::Borrow;
@@ -105,7 +101,13 @@ impl Tensor {
     /// rank mismatch. This avoids the heap allocation that `size()` performs.
     fn size_n<const N: usize>(&self) -> Result<[i64; N], TchError> {
         const DIM_NAMES: [&str; 7] = [
-            "zero dims", "one dim", "two dims", "three dims", "four dims", "five dims", "six dims",
+            "zero dims",
+            "one dim",
+            "two dims",
+            "three dims",
+            "four dims",
+            "five dims",
+            "six dims",
         ];
         let mut sz = [0i64; N];
         let mut ndim = 0i64;
@@ -125,7 +127,13 @@ impl Tensor {
     /// rank mismatch. This avoids the heap allocation that `stride()` performs.
     fn stride_n<const N: usize>(&self) -> Result<[i64; N], TchError> {
         const DIM_NAMES: [&str; 7] = [
-            "zero dims", "one dim", "two dims", "three dims", "four dims", "five dims", "six dims",
+            "zero dims",
+            "one dim",
+            "two dims",
+            "three dims",
+            "four dims",
+            "five dims",
+            "six dims",
         ];
         let mut sz = [0i64; N];
         let mut ndim = 0i64;
@@ -615,9 +623,9 @@ impl Tensor {
         // The C side memcpys numel * elt_size bytes out of `data`, so the
         // slice length has to be validated here: a short buffer (e.g. from a
         // truncated .npy/.npz file) would otherwise be an out-of-bounds read.
-        let numel = size.iter().try_fold(1usize, |acc, &s| {
-            usize::try_from(s).ok().and_then(|s| acc.checked_mul(s))
-        });
+        let numel = size
+            .iter()
+            .try_fold(1usize, |acc, &s| usize::try_from(s).ok().and_then(|s| acc.checked_mul(s)));
         let expected = numel.and_then(|n| n.checked_mul(elt_size_in_bytes));
         match expected {
             Some(expected) if data.len() >= expected => {}
@@ -625,7 +633,7 @@ impl Tensor {
                 return Err(TchError::Shape(format!(
                     "{} bytes of data do not fit a tensor of shape {size:?} and kind {kind:?}",
                     data.len()
-                )))
+                )));
             }
         }
         let data = data.as_ptr() as *const c_void;

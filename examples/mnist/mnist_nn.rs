@@ -1,7 +1,7 @@
 // This should rearch 97% accuracy.
 
 use anyhow::Result;
-use tch::{nn, nn::Module, nn::OptimizerConfig, Device};
+use tch::{Device, nn, nn::Module, nn::OptimizerConfig};
 
 const IMAGE_DIM: i64 = 784;
 const HIDDEN_NODES: i64 = 128;
