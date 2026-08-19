@@ -81,6 +81,7 @@ void at_autocast_set_dtype(int device_type, int dtype);
 
 void at_backward(tensor, int, int);
 int at_requires_grad(tensor);
+void at_release_grad(tensor);
 int at_grad_set_enabled(int);
 tensor at_clip_grad_norm(tensor *grads, int ngrads, double max_norm,
                          double norm_type, int error_if_nonfinite);

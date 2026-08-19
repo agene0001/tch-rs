@@ -308,6 +308,16 @@ int at_requires_grad(tensor t) {
   return -1;
 }
 
+// Detach the gradient entirely, leaving it UNDEFINED rather than defined-and-zero.
+// This is PyTorch's `set_to_none=True`, the default for `zero_grad` since 2.0:
+// optimizers skip parameters whose gradient is undefined, whereas a zeroed but
+// defined gradient still receives decoupled weight decay (which does not consult
+// the gradient's value). Without this there is no way to fully detach a frozen
+// parameter from an optimizer that already holds it.
+void at_release_grad(tensor t) {
+  PROTECT(t->mutable_grad() = torch::Tensor();)
+}
+
 int at_grad_set_enabled(int b) {
   PROTECT(bool is_enabled = torch::autograd::GradMode::is_enabled();
           torch::autograd::GradMode::set_enabled(b); return is_enabled;)

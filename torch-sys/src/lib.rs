@@ -41,6 +41,7 @@ unsafe extern "C" {
     pub fn at_dim(arg: *mut C_tensor) -> size_t;
     pub fn at_get(arg: *mut C_tensor, index: i64) -> *mut C_tensor;
     pub fn at_requires_grad(arg: *mut C_tensor) -> c_int;
+    pub fn at_release_grad(arg: *mut C_tensor);
     pub fn at_shape(arg: *mut C_tensor, sz: *mut i64);
     pub fn at_stride(arg: *mut C_tensor, sz: *mut i64);
     pub fn at_dim_out(out: *mut i64, arg: *mut C_tensor) -> *mut c_char;

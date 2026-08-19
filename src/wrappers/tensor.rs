@@ -340,11 +340,30 @@ impl Tensor {
     }
 
     /// Zeroes the gradient tensor attached to this tensor if defined.
+    ///
+    /// Note the gradient stays DEFINED, just full of zeros. Optimizers skip a
+    /// parameter only when its gradient is undefined, so a parameter zeroed
+    /// this way still receives decoupled weight decay. Use [`Self::release_grad`]
+    /// to detach it completely.
     pub fn zero_grad(&mut self) {
         let mut grad = self.grad();
         if grad.defined() {
             let _ = grad.detach_().zero_();
         }
+    }
+
+    /// Release the gradient attached to this tensor, leaving it undefined.
+    ///
+    /// Equivalent to PyTorch's `zero_grad(set_to_none=True)`, which has been
+    /// that method's default since PyTorch 2.0. The distinction matters for
+    /// frozen parameters: `requires_grad(false)` stops new gradients from
+    /// accumulating, but any gradient already attached remains defined, and an
+    /// optimizer that already holds the parameter will keep applying decoupled
+    /// weight decay to it every step — quietly shrinking weights that are
+    /// supposed to be frozen. Releasing the gradient makes the optimizer skip
+    /// the parameter outright.
+    pub fn release_grad(&mut self) {
+        unsafe_torch!(at_release_grad(self.c_tensor))
     }
 
     /// Runs the backward pass, populating the gradient tensors for tensors
