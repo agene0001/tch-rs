@@ -8,6 +8,7 @@ pub use error::TchError;
 pub type Result<T> = std::result::Result<T, error::TchError>;
 
 pub(crate) mod wrappers;
+pub use wrappers::cuda_graph::CudaGraph;
 pub use wrappers::device::{Cuda, Device};
 pub use wrappers::jit::{self, CModule, IValue, TrainableCModule};
 pub use wrappers::kind::{self, Kind};
