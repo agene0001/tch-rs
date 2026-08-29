@@ -1179,7 +1179,14 @@ cuda_graph atcg_new() {
 }
 
 void atcg_free(cuda_graph g) {
-  if (g) delete static_cast<CCudaGraphHandle *>(g);
+  if (g) {
+    // Never destroy a graph (and release its memory pool) over in-flight
+    // work: replays launch asynchronously, and freeing the pool while a
+    // replay or a successor capture is active corrupted training
+    // process-nondeterministically in consumer gates.
+    PROTECT(torch::cuda::synchronize();)
+    delete static_cast<CCudaGraphHandle *>(g);
+  }
 }
 
 void atcg_side_enter(cuda_graph g_) {
