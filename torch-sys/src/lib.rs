@@ -222,6 +222,11 @@ unsafe extern "C" {
 }
 
 #[repr(C)]
+#[repr(C)]
+pub struct C_cuda_graph {
+    _private: [u8; 0],
+}
+
 pub struct C_optimizer {
     _private: [u8; 0],
 }
@@ -266,6 +271,15 @@ unsafe extern "C" {
     pub fn ato_set_weight_decay(arg: *mut C_optimizer, weight_decay: f64);
     pub fn ato_set_weight_decay_group(arg: *mut C_optimizer, group: size_t, weight_decay: f64);
     pub fn ato_zero_grad(arg: *mut C_optimizer);
+
+    // CUDA graph capture/replay — see torch_api.h for the lifecycle contract.
+    pub fn atcg_new() -> *mut C_cuda_graph;
+    pub fn atcg_free(graph: *mut C_cuda_graph);
+    pub fn atcg_side_enter(graph: *mut C_cuda_graph);
+    pub fn atcg_side_exit(graph: *mut C_cuda_graph);
+    pub fn atcg_capture_begin(graph: *mut C_cuda_graph);
+    pub fn atcg_capture_end(graph: *mut C_cuda_graph);
+    pub fn atcg_replay(graph: *mut C_cuda_graph);
     pub fn ato_step(arg: *mut C_optimizer);
     pub fn ato_free(arg: *mut C_optimizer);
     pub fn at_save_image(arg: *mut C_tensor, filename: *const c_char) -> c_int;

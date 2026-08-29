@@ -391,6 +391,19 @@ impl SystemInfo {
         println!("cargo:rerun-if-changed=libtch/torch_api_generated.cpp");
         println!("cargo:rerun-if-changed=libtch/torch_api_generated.h");
         println!("cargo:rerun-if-changed=libtch/torch_api.cpp");
+        println!("cargo:rerun-if-env-changed=CUDA_PATH");
+        println!("cargo:rerun-if-env-changed=CUDA_HOME");
+        // The CUDA-graph shims in torch_api.cpp include c10/cuda headers,
+        // which transitively need the CUDA *toolkit*'s cuda_runtime.h — a
+        // header libtorch does not ship. Standard NVIDIA installs export
+        // CUDA_PATH (Windows) / CUDA_HOME; when neither exists the shims'
+        // __has_include guard compiles them down to descriptive-error stubs,
+        // so CPU-only setups keep building.
+        let cuda_include_dir = ["CUDA_PATH", "CUDA_HOME"]
+            .iter()
+            .filter_map(|k| std::env::var_os(k))
+            .map(|p| std::path::PathBuf::from(p).join("include"))
+            .find(|p| p.join("cuda_runtime.h").exists());
         println!("cargo:rerun-if-changed=libtch/torch_api.h");
         println!("cargo:rerun-if-changed=libtch/stb_image_write.h");
         println!("cargo:rerun-if-changed=libtch/stb_image_resize.h");
@@ -429,6 +442,7 @@ impl SystemInfo {
                     // is rarely stepped through with a debugger).
                     .opt_level(3)
                     .includes(&self.libtorch_include_dirs)
+                    .includes(cuda_include_dir.iter())
                     .flag(format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
                     // libtorch 2.13 headers require C++20 (designated
                     // initializers, default member init for bit-fields).
@@ -450,6 +464,7 @@ impl SystemInfo {
                     // FFI glue optimized even under debug cargo profiles.
                     .opt_level(3)
                     .includes(&self.libtorch_include_dirs)
+                    .includes(cuda_include_dir.iter())
                     // libtorch 2.13 headers require C++20 (designated
                     // initializers, default member init for bit-fields).
                     .flag("/std:c++20")
@@ -531,7 +546,12 @@ fn main() -> anyhow::Result<()> {
 
         println!("cargo:rustc-link-lib=static=tch");
         if use_cuda {
-            system_info.link("torch_cuda")
+            system_info.link("torch_cuda");
+            // The CUDA-graph shims call c10::cuda stream APIs
+            // (getStreamFromPool / set-current / synchronize), whose symbols
+            // live in c10_cuda — torch_cuda does not re-export them on
+            // Windows, so link it explicitly.
+            system_info.link("c10_cuda");
         }
         if use_cuda_cu {
             system_info.link("torch_cuda_cu")

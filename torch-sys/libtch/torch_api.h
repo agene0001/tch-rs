@@ -42,6 +42,27 @@ typedef void *ivalue;
 #endif
 
 char *get_and_reset_last_err(); // thread-local
+
+// CUDA graph capture/replay (at::cuda::CUDAGraph). Lifecycle:
+//   g = atcg_new();
+//   atcg_side_enter(g);          // switch to the capture side stream
+//   ... warmup steps (eager) ...
+//   atcg_capture_begin(g);
+//   ... ONE step (recorded, NOT executed) ...
+//   atcg_capture_end(g);
+//   atcg_side_exit(g);           // back to the previous stream
+//   atcg_replay(g);              // executes the recorded step; repeatable
+//   atcg_free(g);
+// All functions report failure through the torch_last_err mechanism; on a
+// libtorch built without CUDA they fail with a descriptive error.
+typedef void *cuda_graph;
+cuda_graph atcg_new();
+void atcg_free(cuda_graph);
+void atcg_side_enter(cuda_graph);
+void atcg_side_exit(cuda_graph);
+void atcg_capture_begin(cuda_graph);
+void atcg_capture_end(cuda_graph);
+void atcg_replay(cuda_graph);
 void at_manual_seed(int64_t);
 tensor at_new_tensor();
 tensor at_tensor_of_blob(void *data, int64_t *dims, size_t ndims, int64_t *strides, size_t nstrides, int type, int device);

@@ -24,6 +24,36 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize.h"
 
+// ---------------------------------------------------------------------------
+// CUDA graphs. Guarded by __has_include so CPU-only libtorch builds keep
+// compiling: these headers ship only with CUDA-enabled libtorch.
+// ---------------------------------------------------------------------------
+#if defined(__has_include)
+#if __has_include(<ATen/cuda/CUDAGraph.h>) && __has_include(<cuda_runtime.h>)
+// Both are required: the ATen header ships with CUDA libtorch, but its
+// includes reach the CUDA *toolkit*'s cuda_runtime.h, which build.rs puts on
+// the include path from CUDA_PATH/CUDA_HOME. Missing either degrades the
+// shims to descriptive-error stubs instead of breaking the build.
+#include <ATen/cuda/CUDAGraph.h>
+#include <c10/cuda/CUDAStream.h>
+#define TCH_HAS_CUDA_GRAPH 1
+#endif
+#endif
+
+#ifdef TCH_HAS_CUDA_GRAPH
+// Capture must run on a non-default stream (a CUDA requirement, not a torch
+// one), so the handle owns a pool stream and remembers the stream it displaced
+// while the side stream is active.
+struct CCudaGraphHandle {
+  at::cuda::CUDAGraph graph;
+  c10::cuda::CUDAStream side;
+  c10::cuda::CUDAStream outer;
+  CCudaGraphHandle()
+      : side(c10::cuda::getStreamFromPool()),
+        outer(c10::cuda::getCurrentCUDAStream()) {}
+};
+#endif
+
 thread_local char *torch_last_err = nullptr;
 
 char *get_and_reset_last_err() {
@@ -1141,6 +1171,79 @@ int atc_cuda_is_available() {
   PROTECT(return torch::cuda::is_available();)
   return -1;
 }
+
+#ifdef TCH_HAS_CUDA_GRAPH
+cuda_graph atcg_new() {
+  PROTECT(return new CCudaGraphHandle();)
+  return nullptr;
+}
+
+void atcg_free(cuda_graph g) {
+  if (g) delete static_cast<CCudaGraphHandle *>(g);
+}
+
+void atcg_side_enter(cuda_graph g_) {
+  PROTECT(
+    auto g = static_cast<CCudaGraphHandle *>(g_);
+    g->outer = c10::cuda::getCurrentCUDAStream();
+    // Order every pending outer-stream kernel before side-stream work begins;
+    // a host sync here is fine — capture setup happens once per fit, not per
+    // step.
+    g->outer.synchronize();
+    c10::cuda::setCurrentCUDAStream(g->side);
+  )
+}
+
+void atcg_side_exit(cuda_graph g_) {
+  PROTECT(
+    auto g = static_cast<CCudaGraphHandle *>(g_);
+    g->side.synchronize();
+    c10::cuda::setCurrentCUDAStream(g->outer);
+  )
+}
+
+void atcg_capture_begin(cuda_graph g_) {
+  PROTECT(
+    // ThreadLocal, not the default Global: global capture mode forbids EVERY
+    // other thread in the process from launching CUDA work for the duration
+    // of the capture. Consumers train multiple models in concurrent threads
+    // (and the test harness runs tests in parallel threads) — measured under
+    // global mode, a concurrent thread's kernels corrupted the capture into
+    // silently-wrong weights. ThreadLocal scopes the restriction to the
+    // capturing thread, which is the documented mode for multi-threaded use.
+    static_cast<CCudaGraphHandle *>(g_)->graph.capture_begin(
+        {0, 0}, cudaStreamCaptureModeThreadLocal);
+  )
+}
+
+void atcg_capture_end(cuda_graph g_) {
+  PROTECT(
+    static_cast<CCudaGraphHandle *>(g_)->graph.capture_end();
+  )
+}
+
+void atcg_replay(cuda_graph g_) {
+  PROTECT(
+    static_cast<CCudaGraphHandle *>(g_)->graph.replay();
+  )
+}
+#else
+// CPU-only libtorch: every entry point reports a descriptive error through
+// the standard torch_last_err channel instead of referencing symbols that do
+// not exist in this build.
+static void atcg_unavailable() {
+  torch_last_err = strdup(
+      "CUDA graphs are unavailable: libtorch was built without CUDA "
+      "(ATen/cuda/CUDAGraph.h not found at compile time)");
+}
+cuda_graph atcg_new() { atcg_unavailable(); return nullptr; }
+void atcg_free(cuda_graph) {}
+void atcg_side_enter(cuda_graph) { atcg_unavailable(); }
+void atcg_side_exit(cuda_graph) { atcg_unavailable(); }
+void atcg_capture_begin(cuda_graph) { atcg_unavailable(); }
+void atcg_capture_end(cuda_graph) { atcg_unavailable(); }
+void atcg_replay(cuda_graph) { atcg_unavailable(); }
+#endif
 
 int atc_cudnn_is_available() {
   PROTECT(return torch::cuda::cudnn_is_available();)
