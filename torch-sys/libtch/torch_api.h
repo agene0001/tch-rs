@@ -251,6 +251,8 @@ void atc_synchronize(int64_t device_index);
 int atc_user_enabled_cudnn();
 void atc_set_user_enabled_cudnn(int b);
 void atc_set_benchmark_cudnn(int b);
+void atc_set_deterministic_cudnn(int b);
+void atc_set_deterministic_algorithms(int b, int warn_only);
 int atc_allow_tf32_cublas();
 void atc_set_allow_tf32_cublas(int b);
 int atc_allow_tf32_cudnn();

@@ -98,6 +98,21 @@ impl Cuda {
         unsafe_torch!(torch_sys::cuda::atc_set_benchmark_cudnn(i32::from(b)))
     }
 
+    /// Restricts cuDNN to deterministic algorithms.
+    pub fn cudnn_set_deterministic(b: bool) {
+        unsafe_torch!(torch_sys::cuda::atc_set_deterministic_cudnn(i32::from(b)))
+    }
+
+    /// Global deterministic-algorithms mode (torch.use_deterministic_algorithms).
+    /// With `warn_only`, ops without a deterministic implementation warn
+    /// instead of erroring.
+    pub fn set_deterministic_algorithms(b: bool, warn_only: bool) {
+        unsafe_torch!(torch_sys::cuda::atc_set_deterministic_algorithms(
+            i32::from(b),
+            i32::from(warn_only)
+        ))
+    }
+
     /// Returns true if TF32 is allowed for cuBLAS float32 matmuls.
     pub fn matmul_allow_tf32() -> bool {
         unsafe_torch!(torch_sys::cuda::atc_allow_tf32_cublas()) != 0

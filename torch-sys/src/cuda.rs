@@ -28,6 +28,13 @@ unsafe extern "C" {
     /// Sets CUDNN benchmark mode.
     pub fn atc_set_benchmark_cudnn(b: c_int);
 
+    /// Forces cuDNN to use deterministic algorithms only.
+    pub fn atc_set_deterministic_cudnn(b: c_int);
+
+    /// Global torch deterministic-algorithms flag (throws on
+    /// nondeterministic-only ops unless warn_only).
+    pub fn atc_set_deterministic_algorithms(b: c_int, warn_only: c_int);
+
     /// Returns true if TF32 is allowed for cuBLAS matmuls.
     pub fn atc_allow_tf32_cublas() -> c_int;
 

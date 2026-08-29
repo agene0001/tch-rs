@@ -1289,6 +1289,14 @@ void atc_set_benchmark_cudnn(int b) {
   PROTECT(at::globalContext().setBenchmarkCuDNN(b);)
 }
 
+void atc_set_deterministic_cudnn(int b) {
+  PROTECT(at::globalContext().setDeterministicCuDNN(b);)
+}
+
+void atc_set_deterministic_algorithms(int b, int warn_only) {
+  PROTECT(at::globalContext().setDeterministicAlgorithms(b, warn_only);)
+}
+
 int atc_allow_tf32_cublas() {
   PROTECT(return at::globalContext().allowTF32CuBLAS();)
   return -1;
