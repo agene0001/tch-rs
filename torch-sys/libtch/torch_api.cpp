@@ -1186,8 +1186,18 @@ void atcg_free(cuda_graph g) {
     // work: replays launch asynchronously, and freeing the pool while a
     // replay or a successor capture is active corrupted training
     // process-nondeterministically in consumer gates.
-    PROTECT(torch::cuda::synchronize();)
-    delete static_cast<CCudaGraphHandle *>(g);
+    //
+    // Deliberately NOT PROTECT: a Drop must neither poison the thread-local
+    // error channel (the strdup'd message would be mis-attributed to the
+    // next unrelated call) nor free the pool WITHOUT the sync. If the sync
+    // throws (a prior async CUDA error surfacing), leak the handle — a leak
+    // beats freeing hot memory.
+    try {
+      torch::cuda::synchronize();
+      delete static_cast<CCudaGraphHandle *>(g);
+    } catch (const std::exception &) {
+      // swallow; handle intentionally leaked
+    }
   }
 }
 
