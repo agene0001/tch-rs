@@ -1193,8 +1193,12 @@ void atcg_free(cuda_graph g) {
     // throws (a prior async CUDA error surfacing), leak the handle — a leak
     // beats freeing hot memory.
     try {
-      torch::cuda::synchronize();
-      delete static_cast<CCudaGraphHandle *>(g);
+      // Stream-scoped for the same reason capture_end is: a device sync here
+      // would be illegal whenever another worker thread is capturing.
+      auto h = static_cast<CCudaGraphHandle *>(g);
+      h->side.synchronize();
+      h->outer.synchronize();
+      delete h;
     } catch (const std::exception &) {
       // swallow; handle intentionally leaked
     }
@@ -1237,14 +1241,23 @@ void atcg_capture_begin(cuda_graph g_) {
 
 void atcg_capture_end(cuda_graph g_) {
   PROTECT(
-    static_cast<CCudaGraphHandle *>(g_)->graph.capture_end();
-    // Full device sync before anyone replays: a replay launched immediately
+    auto g = static_cast<CCudaGraphHandle *>(g_);
+    g->graph.capture_end();
+    // Order everything before the first replay: a replay launched immediately
     // after capture_end raced with capture/instantiation bookkeeping —
     // measured as PROCESS-VARYING weight divergence (1e-2-scale) in an
     // otherwise bitwise-exact consumer gate, which went to exactly 0.0
-    // whenever any sync landed between capture_end and the first replay.
-    // Once per capture; costs microseconds against a whole training stage.
-    torch::cuda::synchronize();
+    // whenever a sync landed between capture_end and the first replay.
+    //
+    // Sync THIS HANDLE'S STREAMS, never the device. cudaDeviceSynchronize is
+    // ILLEGAL while any stream on the device is capturing, so the device-wide
+    // version crashed multi-worker training the moment two threads captured
+    // at once (cudaErrorStreamCaptureUnsupported here, and
+    // cudaErrorStreamCaptureInvalidated in the other thread). These two are
+    // the only streams this handle's work touches, and neither is capturing
+    // by this point.
+    g->side.synchronize();
+    g->outer.synchronize();
   )
 }
 
