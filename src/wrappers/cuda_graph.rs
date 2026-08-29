@@ -102,6 +102,18 @@ impl CudaGraph {
         unsafe_torch_err!(torch_sys::atcg_replay(self.c_graph));
         Ok(())
     }
+
+    /// Execute the recorded step on this graph's own side stream,
+    /// event-bracketed against the caller's current stream: pending
+    /// current-stream work (buffer fills) happens-before the replay, and the
+    /// replay happens-before subsequent current-stream work (loss reads).
+    /// Semantically identical to [`Self::replay`] for a single caller; the
+    /// point is that DIFFERENT graphs replay on DIFFERENT streams, letting
+    /// concurrent workers' small-kernel graphs overlap on the GPU.
+    pub fn replay_concurrent(&self) -> Result<(), TchError> {
+        unsafe_torch_err!(torch_sys::atcg_replay_concurrent(self.c_graph));
+        Ok(())
+    }
 }
 
 impl Drop for CudaGraph {

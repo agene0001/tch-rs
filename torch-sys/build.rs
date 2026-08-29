@@ -552,6 +552,19 @@ fn main() -> anyhow::Result<()> {
             // live in c10_cuda — torch_cuda does not re-export them on
             // Windows, so link it explicitly.
             system_info.link("c10_cuda");
+            // CUDAEvent / CUDAStreamGuard headers inline raw CUDA runtime
+            // calls (cudaEventRecord, cudaDeviceSynchronize, ...) into our
+            // torch_api.o, so the toolkit's cudart must be linked directly.
+            if let Some(lib_dir) = ["CUDA_PATH", "CUDA_HOME"]
+                .iter()
+                .filter_map(|k| std::env::var_os(k))
+                .map(std::path::PathBuf::from)
+                .flat_map(|p| [p.join("lib").join("x64"), p.join("lib64"), p.join("lib")])
+                .find(|p| p.join("cudart.lib").exists() || p.join("libcudart.so").exists())
+            {
+                println!("cargo:rustc-link-search=native={}", lib_dir.display());
+                println!("cargo:rustc-link-lib=cudart");
+            }
         }
         if use_cuda_cu {
             system_info.link("torch_cuda_cu")

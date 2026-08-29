@@ -35,7 +35,9 @@
 // the include path from CUDA_PATH/CUDA_HOME. Missing either degrades the
 // shims to descriptive-error stubs instead of breaking the build.
 #include <ATen/cuda/CUDAGraph.h>
+#include <ATen/cuda/CUDAEvent.h>
 #include <c10/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAGuard.h>
 #define TCH_HAS_CUDA_GRAPH 1
 #endif
 #endif
@@ -1241,6 +1243,28 @@ void atcg_replay(cuda_graph g_) {
     static_cast<CCudaGraphHandle *>(g_)->graph.replay();
   )
 }
+
+// Replay on the handle's own side stream, event-bracketed against the
+// caller's current stream: the bracket makes it semantically identical to a
+// current-stream replay for this caller (fills happen-before replay,
+// replay happens-before subsequent reads), while distinct handles replay on
+// distinct streams so concurrent workers' graphs can overlap on the GPU.
+void atcg_replay_concurrent(cuda_graph g_) {
+  PROTECT(
+    auto g = static_cast<CCudaGraphHandle *>(g_);
+    auto cur = c10::cuda::getCurrentCUDAStream();
+    at::cuda::CUDAEvent fills_done;
+    fills_done.record(cur);
+    fills_done.block(g->side);
+    {
+      c10::cuda::CUDAStreamGuard guard(g->side);
+      g->graph.replay();
+    }
+    at::cuda::CUDAEvent replay_done;
+    replay_done.record(g->side);
+    replay_done.block(cur);
+  )
+}
 #else
 // CPU-only libtorch: every entry point reports a descriptive error through
 // the standard torch_last_err channel instead of referencing symbols that do
@@ -1257,6 +1281,7 @@ void atcg_side_exit(cuda_graph) { atcg_unavailable(); }
 void atcg_capture_begin(cuda_graph) { atcg_unavailable(); }
 void atcg_capture_end(cuda_graph) { atcg_unavailable(); }
 void atcg_replay(cuda_graph) { atcg_unavailable(); }
+void atcg_replay_concurrent(cuda_graph) { atcg_unavailable(); }
 #endif
 
 int atc_cudnn_is_available() {
