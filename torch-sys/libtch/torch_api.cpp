@@ -1219,6 +1219,13 @@ void atcg_capture_begin(cuda_graph g_) {
 void atcg_capture_end(cuda_graph g_) {
   PROTECT(
     static_cast<CCudaGraphHandle *>(g_)->graph.capture_end();
+    // Full device sync before anyone replays: a replay launched immediately
+    // after capture_end raced with capture/instantiation bookkeeping —
+    // measured as PROCESS-VARYING weight divergence (1e-2-scale) in an
+    // otherwise bitwise-exact consumer gate, which went to exactly 0.0
+    // whenever any sync landed between capture_end and the first replay.
+    // Once per capture; costs microseconds against a whole training stage.
+    torch::cuda::synchronize();
   )
 }
 
