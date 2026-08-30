@@ -1192,16 +1192,22 @@ void atcg_free(cuda_graph g) {
     // next unrelated call) nor free the pool WITHOUT the sync. If the sync
     // throws (a prior async CUDA error surfacing), leak the handle — a leak
     // beats freeing hot memory.
+    auto h = static_cast<CCudaGraphHandle *>(g);
+    // Best-effort ordering before teardown. Stream-scoped, not device-wide:
+    // a device sync is illegal while any thread is capturing.
     try {
-      // Stream-scoped for the same reason capture_end is: a device sync here
-      // would be illegal whenever another worker thread is capturing.
-      auto h = static_cast<CCudaGraphHandle *>(g);
       h->side.synchronize();
       h->outer.synchronize();
-      delete h;
     } catch (const std::exception &) {
-      // swallow; handle intentionally leaked
+      // Fall through and destroy anyway. An earlier version leaked the
+      // handle here to avoid freeing a pool over in-flight work — that
+      // tradeoff was WRONG BY THREE ORDERS OF MAGNITUDE: each graph owns a
+      // private CUDA memory pool (~60 MB for a TabNet step), a tuning sweep
+      // captures hundreds, and the leak took a 12 GiB card to 34 GiB of
+      // private pools and OOM-killed training. Callers serialize teardown
+      // against capture with their own lock.
     }
+    delete h;
   }
 }
 
