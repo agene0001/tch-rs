@@ -1267,6 +1267,18 @@ void atcg_capture_end(cuda_graph g_) {
   )
 }
 
+// Free/total device memory, so callers can assert that graph teardown
+// actually returns its private pool (the 2026-08-29 OOM was invisible until
+// it was fatal: 34 GiB of pools on a 12 GiB card).
+void atcg_mem_info(int64_t *free_out, int64_t *total_out) {
+  PROTECT(
+    size_t f = 0, t = 0;
+    C10_CUDA_CHECK(cudaMemGetInfo(&f, &t));
+    *free_out = static_cast<int64_t>(f);
+    *total_out = static_cast<int64_t>(t);
+  )
+}
+
 void atcg_replay(cuda_graph g_) {
   PROTECT(
     static_cast<CCudaGraphHandle *>(g_)->graph.replay();
@@ -1311,6 +1323,7 @@ void atcg_capture_begin(cuda_graph) { atcg_unavailable(); }
 void atcg_capture_end(cuda_graph) { atcg_unavailable(); }
 void atcg_replay(cuda_graph) { atcg_unavailable(); }
 void atcg_replay_concurrent(cuda_graph) { atcg_unavailable(); }
+void atcg_mem_info(int64_t *, int64_t *) { atcg_unavailable(); }
 #endif
 
 int atc_cudnn_is_available() {

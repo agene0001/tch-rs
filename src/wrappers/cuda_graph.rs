@@ -103,6 +103,14 @@ impl CudaGraph {
         Ok(())
     }
 
+    /// Free and total device memory in bytes. Lets a caller verify that
+    /// destroying graphs actually returns their private pools.
+    pub fn mem_info() -> Result<(i64, i64), TchError> {
+        let (mut free, mut total) = (0i64, 0i64);
+        unsafe_torch_err!(torch_sys::atcg_mem_info(&mut free, &mut total));
+        Ok((free, total))
+    }
+
     /// Execute the recorded step on this graph's own side stream,
     /// event-bracketed against the caller's current stream: pending
     /// current-stream work (buffer fills) happens-before the replay, and the

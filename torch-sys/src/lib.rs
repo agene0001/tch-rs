@@ -281,6 +281,7 @@ unsafe extern "C" {
     pub fn atcg_capture_end(graph: *mut C_cuda_graph);
     pub fn atcg_replay(graph: *mut C_cuda_graph);
     pub fn atcg_replay_concurrent(graph: *mut C_cuda_graph);
+    pub fn atcg_mem_info(free_out: *mut i64, total_out: *mut i64);
     pub fn ato_step(arg: *mut C_optimizer);
     pub fn ato_free(arg: *mut C_optimizer);
     pub fn at_save_image(arg: *mut C_tensor, filename: *const c_char) -> c_int;
