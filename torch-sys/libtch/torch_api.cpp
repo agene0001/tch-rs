@@ -38,6 +38,7 @@
 #include <ATen/cuda/CUDAEvent.h>
 #include <c10/cuda/CUDAStream.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDACachingAllocator.h>
 #define TCH_HAS_CUDA_GRAPH 1
 #endif
 #endif
@@ -1270,6 +1271,18 @@ void atcg_capture_end(cuda_graph g_) {
 // Free/total device memory, so callers can assert that graph teardown
 // actually returns its private pool (the 2026-08-29 OOM was invisible until
 // it was fatal: 34 GiB of pools on a 12 GiB card).
+// Return cached-but-unused allocator segments to the driver.
+//
+// Destroying a CUDAGraph frees its private pool's BLOCKS inside PyTorch's
+// caching allocator, but the SEGMENTS stay reserved — and since every
+// capture_begin({0,0}) mints a FRESH pool id, those segments are never reused
+// by the next capture. Hundreds of captures per sweep, ~7 MiB apiece, is how
+// a 12 GiB card ended up reporting 34 GiB of private pools. Callers release
+// after teardown to make graph memory genuinely reclaimable.
+void atcg_empty_cache() {
+  PROTECT(c10::cuda::CUDACachingAllocator::emptyCache();)
+}
+
 void atcg_mem_info(int64_t *free_out, int64_t *total_out) {
   PROTECT(
     size_t f = 0, t = 0;
@@ -1324,6 +1337,7 @@ void atcg_capture_end(cuda_graph) { atcg_unavailable(); }
 void atcg_replay(cuda_graph) { atcg_unavailable(); }
 void atcg_replay_concurrent(cuda_graph) { atcg_unavailable(); }
 void atcg_mem_info(int64_t *, int64_t *) { atcg_unavailable(); }
+void atcg_empty_cache() { atcg_unavailable(); }
 #endif
 
 int atc_cudnn_is_available() {

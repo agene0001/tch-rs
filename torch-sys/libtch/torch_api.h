@@ -65,6 +65,7 @@ void atcg_capture_end(cuda_graph);
 void atcg_replay(cuda_graph);
 void atcg_replay_concurrent(cuda_graph);
 void atcg_mem_info(int64_t *free_out, int64_t *total_out);
+void atcg_empty_cache();
 void at_manual_seed(int64_t);
 tensor at_new_tensor();
 tensor at_tensor_of_blob(void *data, int64_t *dims, size_t ndims, int64_t *strides, size_t nstrides, int type, int device);

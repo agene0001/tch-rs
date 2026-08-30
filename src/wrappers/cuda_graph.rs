@@ -103,6 +103,14 @@ impl CudaGraph {
         Ok(())
     }
 
+    /// Release cached-but-unused allocator segments back to the driver.
+    /// Needed after destroying graphs: their private pools are otherwise
+    /// reserved forever and never reused by later captures.
+    pub fn empty_cache() -> Result<(), TchError> {
+        unsafe_torch_err!(torch_sys::atcg_empty_cache());
+        Ok(())
+    }
+
     /// Free and total device memory in bytes. Lets a caller verify that
     /// destroying graphs actually returns their private pools.
     pub fn mem_info() -> Result<(i64, i64), TchError> {
