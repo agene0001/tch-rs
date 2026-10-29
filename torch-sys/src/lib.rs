@@ -227,6 +227,7 @@ pub struct C_cuda_graph {
     _private: [u8; 0],
 }
 
+#[repr(C)]
 pub struct C_optimizer {
     _private: [u8; 0],
 }

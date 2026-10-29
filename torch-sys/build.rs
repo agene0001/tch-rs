@@ -127,10 +127,13 @@ fn extract<P: AsRef<Path>>(filename: P, outpath: P) -> anyhow::Result<()> {
         // enclosed_name is zip 1.0+'s safe replacement for mangled_name; it
         // rejects entries that would escape the extraction directory.
         let Some(enclosed_name) = file.enclosed_name() else {
-            anyhow::bail!("cannot extract file with unsafe path {:?}", file.name());
+            anyhow::bail!(
+                "cannot extract file with unsafe path {:?}",
+                String::from_utf8_lossy(file.name_raw())
+            );
         };
         let outpath = outpath.as_ref().join(enclosed_name);
-        if !file.name().ends_with('/') {
+        if !file.is_dir() {
             println!(
                 "File {} extracted to \"{}\" ({} bytes)",
                 i,
